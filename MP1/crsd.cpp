@@ -13,7 +13,14 @@
 #include <string.h>
 #include "interface.h"
 
-using std::cout, std::endl, std::string, std::thread, std::vector;
+using std::cout, std::endl, std::string, std::thread, std::vector, std::pair, std::to_string;
+
+/**
+    NOTE:
+    Run CRC With ./crc 127.0.0.1 1500
+    Run crsd with ./crsd 1500
+
+*/
 
 struct room {
     public:
@@ -30,6 +37,59 @@ struct room {
 
 vector<room> rooms;
 int currentPort = 1500;
+
+//returns port number of new socket
+pair<int, int> new_master_socket()
+{
+    struct sockaddr_storage their_addr;
+    socklen_t addr_size;
+    struct addrinfo hints, *res;
+    int sockfd, new_fd;
+
+    string this_port = to_string(currentPort++);
+    // !! don't forget your error checking for these calls !!
+
+    // first, load up address structs with getaddrinfo():
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
+
+    while(true)
+    {
+        if(getaddrinfo(NULL, this_port.c_str(), &hints, &res) == -1)
+        {
+            perror("Getaddrinfo error: ");
+        }
+
+        // make a socket, bind it, and listen on it:
+        if((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
+        {
+            perror("socket error: ");
+            this_port = to_string(currentPort++);
+        }
+        else
+        {
+            break;
+        }
+    }
+    
+    if(bind(sockfd, res->ai_addr, res->ai_addrlen) == -1)
+    {
+        close(sockfd);
+        perror("bind error: ");
+    }
+    
+    if(listen(sockfd, 10) == -1)
+    {
+        close(sockfd);
+        perror("listen error: ");
+    }
+
+    pair<int, int> values(sockfd, currentPort - 1);
+    return values;
+}
 
 void process_request(int sockfd, char* buffer)
 {
