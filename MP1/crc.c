@@ -20,22 +20,16 @@ void process_chatmode(const char* host, const int port);
 
 int main(int argc, char** argv) 
 {
-	printf("First");
 	if (argc != 3) {
 		fprintf(stderr,
 				"usage: enter host address and port number\n");
 		exit(1);
 	}
-	printf("We chillin");
     display_title();
-	printf("after dt");
     
 	while (1) {
-		printf("Entered loop");
-		//int sockfd = 0;
 		int sockfd = connect_to(argv[1], argv[2]);
 		//int sockfd = connect_to(argv[1], atoi(argv[2]));
-		printf("%d", sockfd);
     
 		char command[MAX_DATA];
         get_command(command, MAX_DATA);
@@ -111,6 +105,7 @@ int connect_to(const char *host, const char* port)
  */
 struct Reply process_command(const int sockfd, char* command)
 {
+	struct Reply reply;
 	// ------------------------------------------------------------
 	// GUIDE 1:
 	// In this function, you are supposed to parse a given command
@@ -129,14 +124,155 @@ struct Reply process_command(const int sockfd, char* command)
 	// 
 	// - CREATE/DELETE/JOIN and "<name>" are separated by one space.
 	// ------------------------------------------------------------
+	printf("Command: %s\n", command);
+	char name[100];
+	while(1)
+	{
+		char* word = "CREATE";
+		int i;
+		for(i = 0; command[i] != '\0' || i < 6; i++)
+		{
+			if(word[i] != command[i])
+				break;
+		}
+		if(i == 6)
+		{
+			if(command[i] != '\0')
+			{
+				i++;
+			}
+			else
+			{
+				reply.status = FAILURE_INVALID;
+				return reply;
+			}
+			name[0] = 'c';
+			int j = 1;
+			while(command[i] != '\0')
+			{
+				if(command[i] == ' ')
+				{
+					reply.status = FAILURE_INVALID;
+					return reply;
+				}
+				name[j] = command[i];
+				j++;
+				i++;
+			}
+			name[j] = '\0';
+			printf("PM Test: %s\n", name);
+			break;
+		}
 
+		i = 0;
+		word = "DELETE";
+		for(i = 0; command[i] != '\0' || i < 6; i++)
+		{
+			if(word[i] != command[i])
+				break;
+		}
+		if(i == 6)
+		{
+			if(command[i] != '\0')
+			{
+				i++;
+			}
+			else
+			{
+				reply.status = FAILURE_INVALID;
+				return reply;
+			}
+			name[0] = 'd';
+			int j = 1;
+			while(command[i] != '\0')
+			{
+				if(command[i] == ' ')
+				{
+					reply.status = FAILURE_INVALID;
+					return reply;
+				}
+				name[j] = command[i];
+				j++;
+				i++;
+			}
+			name[j] = '\0';
+			printf("PM Test: %s\n", name);
+			break;
+		}
+
+		i = 0;
+		word = "JOIN";
+		for(i = 0; command[i] != '\0' || i < 4; i++)
+		{
+			if(word[i] != command[i])
+				break;
+		}
+		if(i == 4)
+		{
+			if(command[i] != '\0')
+			{
+				i++;
+			}
+			else
+			{
+				reply.status = FAILURE_INVALID;
+				return reply;
+			}
+			name[0] = 'j';
+			int j = 1;
+			while(command[i] != '\0')
+			{
+				if(command[i] == ' ')
+				{
+					reply.status = FAILURE_INVALID;
+					return reply;
+				}
+				name[j] = command[i];
+				j++;
+				i++;
+			}
+			name[j] = '\0';
+			printf("PM Test: %s\n", name);
+			break;
+		}
+
+		i = 0;
+		word = "LIST";
+		for(i = 0; command[i] != '\0' || i < 4; i++)
+		{
+			if(word[i] != command[i])
+				break;
+		}
+		if(command[i] != '\0')
+		{
+			reply.status = FAILURE_INVALID;
+			return reply;
+		}
+		else
+		{
+			name[0] = 'l';
+			name[1] = '\0';
+			break;
+		}
+	}
+	
 
 	// ------------------------------------------------------------
 	// GUIDE 2:
 	// After you create the message, you need to send it to the
 	// server and receive a result from the server.
 	// ------------------------------------------------------------
-
+	if(send(sockfd, name, sizeof(name), 0) != 0)
+		perror("Send");
+	
+	char buffer[256];
+	if(recv(sockfd, buffer, sizeof(buffer), 0) != 0)
+		perror("Client recv");
+	struct Reply serverResponse = *(struct Reply *)buffer;
+	if(serverResponse.status == SUCCESS)
+		printf("SUCCESSSSSSS\n");
+	else
+		printf("Not successful\n");
 
 	// ------------------------------------------------------------
 	// GUIDE 3:
@@ -181,7 +317,7 @@ struct Reply process_command(const int sockfd, char* command)
 	// ------------------------------------------------------------
 
 	// REMOVE below code and write your own Reply.
-	struct Reply reply;
+	
 	reply.status = SUCCESS;
 	reply.num_member = 5;
 	reply.port = 1024;
