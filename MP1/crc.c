@@ -32,9 +32,10 @@ int main(int argc, char** argv)
     
 	while (1) {
 		printf("Entered loop");
+		//int sockfd = 0;
 		int sockfd = connect_to(argv[1], argv[2]);
 		//int sockfd = connect_to(argv[1], atoi(argv[2]));
-		printf("After connect_to");
+		printf("%d", sockfd);
     
 		char command[MAX_DATA];
         get_command(command, MAX_DATA);
