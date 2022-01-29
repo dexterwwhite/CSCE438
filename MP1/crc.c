@@ -262,14 +262,14 @@ struct Reply process_command(const int sockfd, char* command)
 	// After you create the message, you need to send it to the
 	// server and receive a result from the server.
 	// ------------------------------------------------------------
-	if(send(sockfd, name, sizeof(name), 0) != 0)
+	if(send(sockfd, name, sizeof(name), 0) == -1)
 		perror("Send");
 	
 	char buffer[256];
-	if(recv(sockfd, buffer, sizeof(buffer), 0) != 0)
+	if(recv(sockfd, buffer, sizeof(buffer), 0) == -1)
 		perror("Client recv");
-	struct Reply serverResponse = *(struct Reply *)buffer;
-	if(serverResponse.status == SUCCESS)
+	reply = *(struct Reply *)buffer;
+	if(reply.status == SUCCESS)
 		printf("SUCCESSSSSSS\n");
 	else
 		printf("Not successful\n");
@@ -318,9 +318,9 @@ struct Reply process_command(const int sockfd, char* command)
 
 	// REMOVE below code and write your own Reply.
 	
-	reply.status = SUCCESS;
-	reply.num_member = 5;
-	reply.port = 1024;
+	// reply.status = SUCCESS;
+	// reply.num_member = 5;
+	// reply.port = 1024;
 	return reply;
 }
 

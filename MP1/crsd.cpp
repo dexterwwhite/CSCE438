@@ -27,11 +27,13 @@ struct room {
         string name;
         int num_members;
         int port_no;
-        room(string roomName, int port)
+        int sockfd;
+        room(string roomName, int port, int fd)
         {
             name = roomName;
             num_members = 0;
             port_no = port;
+            sockfd = fd;
         }
 };
 
@@ -41,23 +43,26 @@ int currentPort = 1500;
 //returns port number of new socket
 pair<int, int> new_master_socket()
 {
-    struct sockaddr_storage their_addr;
-    socklen_t addr_size;
-    struct addrinfo hints, *res;
-    int sockfd, new_fd;
+    
+    int sockfd;
 
-    string this_port = to_string(currentPort++);
+    cout << "Current port: " << currentPort << endl;
+
+    string this_port = to_string(currentPort);
     // !! don't forget your error checking for these calls !!
 
     // first, load up address structs with getaddrinfo():
 
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
+    
 
     while(true)
     {
+        struct addrinfo hints, *res;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
+        cout << "Current port while: " << currentPort << endl;
         if(getaddrinfo(NULL, this_port.c_str(), &hints, &res) == -1)
         {
             perror("Getaddrinfo error: ");
@@ -69,16 +74,17 @@ pair<int, int> new_master_socket()
             perror("socket error: ");
             this_port = to_string(currentPort++);
         }
+    
+        if(bind(sockfd, res->ai_addr, res->ai_addrlen) == -1)
+        {
+            close(sockfd);
+            perror("bind error: ");
+            this_port = to_string(currentPort++);
+        }
         else
         {
             break;
         }
-    }
-    
-    if(bind(sockfd, res->ai_addr, res->ai_addrlen) == -1)
-    {
-        close(sockfd);
-        perror("bind error: ");
     }
     
     if(listen(sockfd, 10) == -1)
@@ -87,7 +93,9 @@ pair<int, int> new_master_socket()
         perror("listen error: ");
     }
 
-    pair<int, int> values(sockfd, currentPort - 1);
+    //currentPort--
+    pair<int, int> values(sockfd, currentPort);
+    currentPort++;
     return values;
 }
 
@@ -106,17 +114,19 @@ void process_request(int sockfd, char* buffer)
             if(name == rooms.at(i).name)
             {
                 serverReply->status = FAILURE_ALREADY_EXISTS;
-                if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) != 0)
+                if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
                     perror("Server send");
                 return;
             }
         }
+        
+        pair<int, int> roomInfo = new_master_socket();
 
-        room newRoom(name, currentPort);
+        room newRoom(name, roomInfo.second, roomInfo.first);
         rooms.push_back(newRoom);
         cout << "Room created!" << endl;
         serverReply->status = SUCCESS;
-        if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) != 0)
+        if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
             perror("Server send");
         return;
     }
@@ -130,7 +140,24 @@ void process_request(int sockfd, char* buffer)
     }
     else if(buffer[0] == 'l')
     {
-        cout << "OKAY :(" << endl;
+        int index = 0;
+        for(int i = 0; i < rooms.size(); i++)
+        {
+            string name = rooms.at(i).name;
+            for(int j = 0; j < name.length(); j++)
+            {
+                serverReply->list_room[index++] = name.at(j);
+            }
+            if(i != rooms.size() - 1)
+            {
+                serverReply->list_room[index++] = ',';
+            }
+        }
+        serverReply->list_room[index] = '\0';
+        serverReply->status = SUCCESS;
+        if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
+            perror("Server send");
+        return;
     }
     else
     {
