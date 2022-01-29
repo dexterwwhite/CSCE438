@@ -13,23 +13,28 @@
 /*
  * TODO: IMPLEMENT BELOW THREE FUNCTIONS
  */
-int connect_to(const char *host, const int port);
+//int connect_to(const char *host, const int port);
+int connect_to(const char *host, const char* port);
 struct Reply process_command(const int sockfd, char* command);
 void process_chatmode(const char* host, const int port);
 
 int main(int argc, char** argv) 
 {
+	printf("First");
 	if (argc != 3) {
 		fprintf(stderr,
 				"usage: enter host address and port number\n");
 		exit(1);
 	}
-
+	printf("We chillin");
     display_title();
+	printf("after dt");
     
 	while (1) {
-	
-		int sockfd = connect_to(argv[1], atoi(argv[2]));
+		printf("Entered loop");
+		int sockfd = connect_to(argv[1], argv[2]);
+		//int sockfd = connect_to(argv[1], atoi(argv[2]));
+		printf("After connect_to");
     
 		char command[MAX_DATA];
         get_command(command, MAX_DATA);
@@ -57,7 +62,7 @@ int main(int argc, char** argv)
  * 
  * @return socket fildescriptor
  */
-int connect_to(const char *host, const int port)
+int connect_to(const char *host, const char* port)
 {
 	// ------------------------------------------------------------
 	// GUIDE :
@@ -70,7 +75,27 @@ int connect_to(const char *host, const int port)
 	// ------------------------------------------------------------
 
     // below is just dummy code for compilation, remove it.
-	int sockfd = -1;
+	struct addrinfo hints, *res;
+	int sockfd;
+
+	// first, load up address structs with getaddrinfo():
+
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+
+	if(getaddrinfo(host, port, &hints, &res) == -1)
+		perror("GAI");
+
+	// make a socket:
+
+	if((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
+		perror("socket");
+
+	// connect!
+
+	if(connect(sockfd, res->ai_addr, res->ai_addrlen) == -1)
+		perror("connect");
 	return sockfd;
 }
 

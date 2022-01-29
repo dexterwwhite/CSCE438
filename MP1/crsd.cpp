@@ -1,4 +1,7 @@
 #include <iostream>
+#include <string>
+#include <thread>
+#include <vector>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -10,17 +13,41 @@
 #include <string.h>
 #include "interface.h"
 
-using std::cout, std::endl;
+using std::cout, std::endl, std::string, std::thread;
+
+void handle_client(int sockfd) {
+    cout << "OKAY" << endl;
+    int bufferCapacity = 256;
+    char* buffer = new char[bufferCapacity];
+    close(sockfd);
+}
+
+void processing_loop(int sockfd)
+{
+    while(true)
+    {
+        struct sockaddr_storage otherAddr;
+        socklen_t size = sizeof(otherAddr);
+        int newSockFD;
+        if((newSockFD = accept(sockfd, (struct sockaddr *) &otherAddr, &size)) != 0)
+        {
+            perror("Server accept");
+        }
+        thread newThread(handle_client, newSockFD);
+        newThread.join();
+    }
+}
 
 int main(int argc, char** argv)
 {
-    if(argc != 2 || argc != 3)
+    if(argc != 2 && argc != 3)
     {
         cout << "Incorrect Command Line Arguments!" << endl;
         exit(1);
     }
 
-    char* this_port = "1500\0";
+    string this_port = argv[1];
+    cout << "Argv[1]: " << this_port << endl;
 
     struct sockaddr_storage their_addr;
     socklen_t addr_size;
@@ -36,19 +63,25 @@ int main(int argc, char** argv)
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
 
-    if(getaddrinfo(NULL, this_port, &hints, &res) == -1)
+    if(getaddrinfo(NULL, this_port.c_str(), &hints, &res) == -1)
         perror("Getaddrinfo error: ");
+
+    cout << "PASSED GEI" << endl;
 
     // make a socket, bind it, and listen on it:
 
     if((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
         perror("socket error: ");
     
+    cout << "PASSED socket" << endl;
+    
     if(bind(sockfd, res->ai_addr, res->ai_addrlen) == -1)
     {
         close(sockfd);
         perror("bind error: ");
     }
+
+    cout << "PASSED bind" << endl;
     
     if(listen(sockfd, 10) == -1)
     {
@@ -56,10 +89,31 @@ int main(int argc, char** argv)
         perror("listen error: ");
     }
 
+    cout << "PASSED listen" << endl;
+
     // now accept an incoming connection:
 
     addr_size = sizeof their_addr;
     new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
 
+    cout << "PASSED accept" << endl;
+
     // ready to communicate on socket descriptor new_fd!
+
+    processing_loop(sockfd);
+
+    cout << "Server terminated" << endl;
+
+    // while(true)
+    // {
+    //     struct sockaddr_storage otherAddr;
+    //     socklen_t size = sizeof(otherAddr);
+    //     int newSockFD;
+    //     if((newSockFD = accept(sockfd, (struct sockaddr *) &otherAddr, &size)) != 0)
+    //     {
+    //         perror("Server accept");
+    //     }
+    //     thread newThread(handle_client, newSockFD);
+    //     newThread.join();
+    // }
 }
