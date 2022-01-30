@@ -2,6 +2,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <mutex>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -13,7 +14,7 @@
 #include <string.h>
 #include "interface.h"
 
-using std::cout, std::endl, std::string, std::thread, std::vector, std::pair, std::to_string;
+using std::cout, std::endl, std::string, std::thread, std::vector, std::pair, std::to_string, std::unique_lock, std::mutex;
 
 /**
     NOTE:
@@ -39,30 +40,22 @@ struct room {
 
 vector<room> rooms;
 int currentPort = 1500;
+mutex mtx;
 
-//returns port number of new socket
+//returns pair<sockfd, port number> of new socket
 pair<int, int> new_master_socket()
 {
-    
     int sockfd;
-
-    cout << "Current port: " << currentPort << endl;
-
     string this_port = to_string(currentPort);
-    // !! don't forget your error checking for these calls !!
-
-    // first, load up address structs with getaddrinfo():
-
-    
 
     while(true)
     {
+        cout << "Current port: " << currentPort << endl;
         struct addrinfo hints, *res;
         memset(&hints, 0, sizeof hints);
         hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
-        cout << "Current port while: " << currentPort << endl;
         if(getaddrinfo(NULL, this_port.c_str(), &hints, &res) == -1)
         {
             perror("Getaddrinfo error: ");
@@ -93,10 +86,77 @@ pair<int, int> new_master_socket()
         perror("listen error: ");
     }
 
-    //currentPort--
     pair<int, int> values(sockfd, currentPort);
     currentPort++;
     return values;
+}
+
+void handle_room(int sockfd, vector<int>& sockFDVec) 
+{
+    cout << "Handling Room..." << endl;
+    int bufferCapacity = 256;
+    char* buffer = new char[bufferCapacity];
+	if (!buffer){
+        cout << "Cannot allocate memory for server buffer" << endl;
+        exit(1);
+	}
+	while (true){
+		int nbytes = recv(sockfd, buffer, bufferCapacity, 0);
+		if (nbytes < 0){
+			cout << "Client-side terminated abnormally" << endl;
+			break;
+		}else if (nbytes == 0){
+			// could not read anything in current iteration
+			cout << "Could not read anything" << endl;
+			break;
+		}
+		// MESSAGE_TYPE m = *(MESSAGE_TYPE *) buffer;
+		// if (m == QUIT_MSG){
+		// 	break;
+		// 	// note that QUIT_MSG does not get a reply from the server
+		// }
+		cout << "Message: " << buffer << endl;
+        string msg = buffer;
+        msg += "\n";
+        {
+            unique_lock<mutex> fdLock(mtx);
+            for(int i = 0; i < sockFDVec.size(); i++)
+            {
+                if(sockFDVec.at(i) != sockfd)
+                {
+                    if(send(sockFDVec.at(i), msg.c_str(), sizeof(msg), 0) == -1)
+                        perror("Room send");
+                }
+            }
+        }
+        cout << "Made it out" << endl;
+        
+	}
+	delete [] buffer;
+    close(sockfd);
+}
+
+void room_loop(int sockfd)
+{
+    vector<int> sockFDVec;
+    while(true)
+    {
+        cout << "Entered Room Loop" << endl;
+        struct sockaddr_storage otherAddr;
+        socklen_t size = sizeof(otherAddr);
+        int newSockFD;
+        if((newSockFD = accept(sockfd, (struct sockaddr *) &otherAddr, &size)) == -1)
+        {
+            perror("Server accept");
+            break;
+        }
+        {
+            unique_lock<mutex> fdLock(mtx);
+            sockFDVec.push_back(newSockFD);
+        }
+        thread newThread(handle_room, newSockFD, std::ref(sockFDVec));
+        newThread.detach();
+    }
 }
 
 void process_request(int sockfd, char* buffer)
@@ -128,6 +188,9 @@ void process_request(int sockfd, char* buffer)
         serverReply->status = SUCCESS;
         if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
             perror("Server send");
+
+        thread roomThread(room_loop, roomInfo.first);
+        roomThread.detach();
         return;
     }
     else if(buffer[0] == 'd')
@@ -136,7 +199,31 @@ void process_request(int sockfd, char* buffer)
     }
     else if(buffer[0] == 'j')
     {
-        cout << "OKAY :(" << endl;
+        string name = "";
+        for(int i = 1; buffer[i] != '\0'; i++)
+        {
+            name += buffer[i];
+        }
+
+        for(int i = 0; i < rooms.size(); i++)
+        {
+            if(name == rooms.at(i).name)
+            {
+                serverReply->status = SUCCESS;
+                serverReply->num_member = rooms.at(i).num_members;
+                serverReply->port = rooms.at(i).port_no;
+                if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
+                    perror("Server send");
+                rooms.at(i).num_members += 1;
+                return;
+            }
+        }
+
+        serverReply->status = FAILURE_NOT_EXISTS;
+        cout << "Room does not exist!" << endl;
+        if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
+            perror("Server send");
+        return;
     }
     else if(buffer[0] == 'l')
     {
@@ -207,7 +294,7 @@ void processing_loop(int sockfd)
             perror("Server accept");
         }
         thread newThread(handle_client, newSockFD);
-        newThread.join();
+        newThread.detach();
     }
 }
 

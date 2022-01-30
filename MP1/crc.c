@@ -338,6 +338,10 @@ void process_chatmode(const char* host, const int port)
 	// to the server using host and port.
 	// You may re-use the function "connect_to".
 	// ------------------------------------------------------------
+	char portStr[10];
+	snprintf(portStr, 10, "%d", port);
+	printf("the new port: %s\n", portStr);
+	int sockfd = connect_to(host, portStr);
 
 	// ------------------------------------------------------------
 	// GUIDE 2:
@@ -346,7 +350,45 @@ void process_chatmode(const char* host, const int port)
 	// At the same time, the client should wait for a message from
 	// the server.
 	// ------------------------------------------------------------
-	
+	while(1)
+	{
+		char sendBuffer[256];
+		get_message(sendBuffer, sizeof(sendBuffer));
+		if(send(sockfd, sendBuffer, sizeof(sendBuffer), 0) == -1)
+			perror("Chatmode Send");
+
+		char displayBuffer[256];
+		if(recv(sockfd, displayBuffer, sizeof(displayBuffer), 0) == -1)
+			perror("Chatmode Recv");
+		
+		display_message(displayBuffer);
+
+		// int bytes = 1;
+		// while(bytes > 0)
+		// {
+		// 	char displayBuffer[256];
+		// 	bytes = recv(sockfd, displayBuffer, sizeof(displayBuffer), 0);
+		// 	if(bytes == -1)
+		// 	{
+		// 		perror("Chatmode Recv");
+		// 		break;
+		// 	}
+
+		// 	display_message(displayBuffer);
+		// }
+
+		// int status;
+		// while((status = recv(sockfd, displayBuffer, sizeof(displayBuffer), 0)) != 0)
+		// {
+		// 	if(status == -1)
+		// 	{
+		// 		perror("Chatmode recv");
+		// 	}
+		// 	display_message(displayBuffer);
+		// }
+		
+	}
+
     // ------------------------------------------------------------
     // IMPORTANT NOTICE:
     // 1. To get a message from a user, you should use a function
