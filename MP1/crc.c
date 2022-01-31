@@ -90,7 +90,11 @@ int connect_to(const char *host, const char* port)
 
 	//Connect to server with above socket file descriptor and res
 	if(connect(sockfd, res->ai_addr, res->ai_addrlen) == -1)
+	{
 		perror("connect");
+		printf("It appears there is not a socket listening at this address or port!\n");
+		exit(1);
+	}
 	
 	//Return socket file descriptor
 	return sockfd;
