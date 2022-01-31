@@ -38,6 +38,7 @@ struct room {
         }
 };
 
+vector<vector<int>> allSockFDs;
 vector<room> rooms;
 int currentPort = 1500;
 mutex mtx;
@@ -91,7 +92,7 @@ pair<int, int> new_master_socket()
     return values;
 }
 
-void handle_room(int sockfd, vector<int>& sockFDVec) 
+void handle_room(int sockfd, int position) 
 {
     cout << "Handling Room..." << endl;
     int bufferCapacity = 256;
@@ -117,17 +118,36 @@ void handle_room(int sockfd, vector<int>& sockFDVec)
 		// }
 		cout << "Message: " << buffer << endl;
         string msg = buffer;
-        msg += "\n";
+        //msg += "\n";
         {
             unique_lock<mutex> fdLock(mtx);
-            for(int i = 0; i < sockFDVec.size(); i++)
+            cout << "handle room before vec" << endl;
+            // if(position >= allSockFDs.size())
+            //     break;
+            bool isThere = false;
+            for(int i = 0; i < allSockFDs.size(); i++)
             {
-                if(sockFDVec.at(i) != sockfd)
+                for(int j = 0; j < allSockFDs.at(i).size(); j++)
                 {
-                    if(send(sockFDVec.at(i), msg.c_str(), sizeof(msg), 0) == -1)
+                    if(allSockFDs.at(i).at(j) == sockfd)
+                    {
+                        isThere = true;
+                        break;
+                    }
+                }
+            }
+
+            if(!isThere)
+                break;
+            for(int i = 0; i < allSockFDs.at(position).size(); i++)
+            {
+                if(allSockFDs.at(position).at(i) != sockfd)
+                {
+                    if(send(allSockFDs.at(position).at(i), msg.c_str(), sizeof(msg), 0) == -1)
                         perror("Room send");
                 }
             }
+            cout << "handle room after vec" << endl;
         }
         cout << "Made it out" << endl;
         
@@ -136,9 +156,9 @@ void handle_room(int sockfd, vector<int>& sockFDVec)
     close(sockfd);
 }
 
-void room_loop(int sockfd)
+void room_loop(int sockfd, int position)
 {
-    vector<int> sockFDVec;
+    //vector<int> sockFDVec;
     while(true)
     {
         cout << "Entered Room Loop" << endl;
@@ -152,9 +172,12 @@ void room_loop(int sockfd)
         }
         {
             unique_lock<mutex> fdLock(mtx);
-            sockFDVec.push_back(newSockFD);
+            //sockFDVec.push_back(newSockFD);
+            cout << "room loop before vec" << endl;
+            allSockFDs.at(position).push_back(newSockFD);
+            cout << "room loop after vec" << endl;
         }
-        thread newThread(handle_room, newSockFD, std::ref(sockFDVec));
+        thread newThread(handle_room, newSockFD, position);
         newThread.detach();
     }
 }
@@ -183,19 +206,66 @@ void process_request(int sockfd, char* buffer)
         pair<int, int> roomInfo = new_master_socket();
 
         room newRoom(name, roomInfo.second, roomInfo.first);
-        rooms.push_back(newRoom);
+        vector<int> newRoomSockFDs;
+        int position;
+        {
+            unique_lock<mutex> roomLock(mtx);
+            rooms.push_back(newRoom);
+            allSockFDs.push_back(newRoomSockFDs);
+            position = allSockFDs.size() - 1;
+        }
         cout << "Room created!" << endl;
         serverReply->status = SUCCESS;
         if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
             perror("Server send");
 
-        thread roomThread(room_loop, roomInfo.first);
+        
+        thread roomThread(room_loop, roomInfo.first, position);
         roomThread.detach();
         return;
     }
     else if(buffer[0] == 'd')
     {
-        cout << "OKAY :(" << endl;
+        string name = "";
+        for(int i = 1; buffer[i] != '\0'; i++)
+        {
+            name += buffer[i];
+        }
+
+        for(int i = 0; i < rooms.size(); i++)
+        {
+            if(name == rooms.at(i).name)
+            {
+                {
+                    unique_lock<mutex> deleteLock(mtx);
+                    string deleteMSG = "Warning, chat room closed\n";
+                    for(int j = 0; j < allSockFDs.at(i).size(); j++)
+                    {
+                        cout << "Loop iteration" << endl;
+                        if(send(allSockFDs.at(i).at(j), deleteMSG.c_str(), sizeof(deleteMSG), 0) == -1)
+                            perror("Server Delete Send");
+                        close(allSockFDs.at(i).at(j));
+                    }
+                    cout << "Before erase 1" << endl;
+                    allSockFDs.erase(allSockFDs.begin() + i);
+                    cout << "Before close" << endl;
+                    close(rooms.at(i).sockfd);
+                    cout << "Before erase 2" << endl;
+                    rooms.erase(rooms.begin() + i);
+                    cout << "MUTEX end" << endl;
+                }
+                serverReply->status = SUCCESS;
+                if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
+                    perror("Server send");
+                return;
+            }
+        }
+
+        serverReply->status = FAILURE_NOT_EXISTS;
+        if(send(sockfd, (char*)serverReply, sizeof(Reply), 0) == -1)
+            perror("Server send");
+        return;
+
     }
     else if(buffer[0] == 'j')
     {

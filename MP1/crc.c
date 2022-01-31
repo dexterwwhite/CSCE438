@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+//#include <pthread.h>
+#include <poll.h>
 #include "interface.h"
 
 
@@ -324,6 +326,22 @@ struct Reply process_command(const int sockfd, char* command)
 	return reply;
 }
 
+// void receive_loop(const int sockfd)
+// {
+// 	printf("Receiving!\n");
+// 	char displayBuffer[256];
+// 	int bytes;
+// 	while((bytes = recv(sockfd, displayBuffer, sizeof(displayBuffer), 0)) > 0)
+// 	{
+// 		printf("Loop iteration!\n");
+// 		display_message(displayBuffer);
+// 	}
+// 	if(bytes == -1)
+// 	{
+// 		perror("chatmode recv");
+// 	}
+// }
+
 /* 
  * Get into the chat mode
  * 
@@ -342,6 +360,9 @@ void process_chatmode(const char* host, const int port)
 	snprintf(portStr, 10, "%d", port);
 	printf("the new port: %s\n", portStr);
 	int sockfd = connect_to(host, portStr);
+	int pollVal;
+	struct pollfd fds[2];
+	int timeout;
 
 	// ------------------------------------------------------------
 	// GUIDE 2:
@@ -350,18 +371,74 @@ void process_chatmode(const char* host, const int port)
 	// At the same time, the client should wait for a message from
 	// the server.
 	// ------------------------------------------------------------
+	int fd = 0;
+	char sendbuff[256];
+	int bytes;
 	while(1)
 	{
-		char sendBuffer[256];
-		get_message(sendBuffer, sizeof(sendBuffer));
-		if(send(sockfd, sendBuffer, sizeof(sendBuffer), 0) == -1)
-			perror("Chatmode Send");
+		fds[0].fd = sockfd;
+		fds[0].events = 0;
+		fds[0].events |= POLLIN;
+		fds[1].fd = fd;
+		fds[1].events = 0;
+		fds[1].events |= POLLIN;
 
-		char displayBuffer[256];
-		if(recv(sockfd, displayBuffer, sizeof(displayBuffer), 0) == -1)
-			perror("Chatmode Recv");
-		
-		display_message(displayBuffer);
+		timeout = 2000;
+
+		pollVal = poll(fds, 2, timeout);
+
+		if(pollVal == 0)
+		{
+			printf("");
+		}
+		else
+		{
+			//printf("else\n");
+			if(fds[0].revents && POLLIN)
+			{
+				char displayBuffer[256];
+				if(recv(sockfd, displayBuffer, sizeof(displayBuffer), 0) == -1)
+					perror("Chatmode Recv");
+				display_message(displayBuffer);
+				if(strcmp(displayBuffer, "Warning, chat room closed\n") == 0)
+				{
+					close(sockfd);
+					break;
+				}
+			}
+			else
+			{
+				memset((void *) sendbuff, 0, 256);
+				bytes = read(fd, (void *) sendbuff, 255);
+				if(send(sockfd, sendbuff, sizeof(sendbuff), 0) == -1)
+					perror("Chatmode Send");
+			}
+		}
+
+
+		// if(pollVal == 0)
+		// {
+		// 	printf("if\n");
+		// 	char sendBuffer[256];
+		// 	get_message(sendBuffer, sizeof(sendBuffer));
+		// 	if(send(sockfd, sendBuffer, sizeof(sendBuffer), 0) == -1)
+		// 		perror("Chatmode Send");
+		// }
+		// else
+		// {
+		// 	printf("else\n");
+		// 	char displayBuffer[256];
+		// 	if(recv(sockfd, displayBuffer, sizeof(displayBuffer), 0) == -1)
+		// 		perror("Chatmode Recv");
+			
+		// 	display_message(displayBuffer);
+		// }
+
+
+		// pthread_t recv_thread;
+		// pthread_create(&recv_thread, NULL, receive_loop, sockfd);
+		// pthread_detach(recv_thread);
+
 
 		// int bytes = 1;
 		// while(bytes > 0)
