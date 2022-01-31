@@ -109,6 +109,14 @@ void handle_room(int sockfd, int position)
 		}else if (nbytes == 0){
 			// could not read anything in current iteration
 			cout << "Could not read anything" << endl;
+            for(int i = 0; i < allSockFDs.at(position).size(); i++)
+            {
+                if(allSockFDs.at(position).at(i) == sockfd)
+                {
+                    allSockFDs.at(position).erase(allSockFDs.at(position).begin() + i);
+                }
+            }
+            rooms.at(position).num_members -= 1;
 			break;
 		}
 		// MESSAGE_TYPE m = *(MESSAGE_TYPE *) buffer;
@@ -172,6 +180,21 @@ void room_loop(int sockfd, int position)
         }
         {
             unique_lock<mutex> fdLock(mtx);
+            bool found = false;
+            for(int i = 0; i < rooms.size(); i++)
+            {
+                if(rooms.at(i).sockfd == sockfd)
+                {
+                    found = true;
+                    position = i;
+                    break;
+                }
+            }
+
+            if(!found)
+            {
+                break;
+            }
             //sockFDVec.push_back(newSockFD);
             cout << "room loop before vec" << endl;
             allSockFDs.at(position).push_back(newSockFD);

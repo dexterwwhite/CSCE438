@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-//#include <pthread.h>
 #include <poll.h>
 #include "interface.h"
 
@@ -31,7 +30,6 @@ int main(int argc, char** argv)
     
 	while (1) {
 		int sockfd = connect_to(argv[1], argv[2]);
-		//int sockfd = connect_to(argv[1], atoi(argv[2]));
     
 		char command[MAX_DATA];
         get_command(command, MAX_DATA);
@@ -39,10 +37,14 @@ int main(int argc, char** argv)
 		struct Reply reply = process_command(sockfd, command);
 		display_reply(command, reply);
 		
+		//Checks whether client successfully joined a chatroom
 		touppercase(command, strlen(command) - 1);
-		if (strncmp(command, "JOIN", 4) == 0) {
+		if (strncmp(command, "JOIN", 4) == 0 && reply.status == SUCCESS) {
 			printf("Now you are in the chatmode\n");
 			process_chatmode(argv[1], reply.port);
+
+			//If chatroom is closed while client is inside, displays title once again
+			display_title();
 		}
 	
 		close(sockfd);
@@ -57,7 +59,7 @@ int main(int argc, char** argv)
  * @parameter host    host address given by command line argument
  * @parameter port    port given by command line argument
  * 
- * @return socket fildescriptor
+ * @return socket file descriptor
  */
 int connect_to(const char *host, const char* port)
 {
@@ -70,29 +72,27 @@ int connect_to(const char *host, const char* port)
 	// Finally, you should return the socket fildescriptor
 	// so that other functions such as "process_command" can use it
 	// ------------------------------------------------------------
-
-    // below is just dummy code for compilation, remove it.
 	struct addrinfo hints, *res;
 	int sockfd;
 
-	// first, load up address structs with getaddrinfo():
-
+	//Set up hints
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 
+	//Get address info of the server, update hints and res
 	if(getaddrinfo(host, port, &hints, &res) == -1)
 		perror("GAI");
 
-	// make a socket:
-
+	//Create socket using res
 	if((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
 		perror("socket");
 
-	// connect!
-
+	//Connect to server with above socket file descriptor and res
 	if(connect(sockfd, res->ai_addr, res->ai_addrlen) == -1)
 		perror("connect");
+	
+	//Return socket file descriptor
 	return sockfd;
 }
 
@@ -126,21 +126,27 @@ struct Reply process_command(const int sockfd, char* command)
 	// 
 	// - CREATE/DELETE/JOIN and "<name>" are separated by one space.
 	// ------------------------------------------------------------
-	printf("Command: %s\n", command);
 	char name[100];
 	while(1)
 	{
+		//Lines 133-174 check for and handle user command CREATE
 		char* word = "CREATE";
 		int i;
+
+		//Checks character by character if command == 'CREATE'
 		for(i = 0; command[i] != '\0' || i < 6; i++)
 		{
 			if(word[i] != command[i])
 				break;
 		}
+
+		//If i != 6, we know command was not 'CREATE'
 		if(i == 6)
 		{
+			//Check if command is valid format: CREATE <name>
 			if(command[i] != '\0')
 			{
+				//Skip space character in command
 				i++;
 			}
 			else
@@ -148,6 +154,8 @@ struct Reply process_command(const int sockfd, char* command)
 				reply.status = FAILURE_INVALID;
 				return reply;
 			}
+
+			//Format message to server in form: 'c<name>'
 			name[0] = 'c';
 			int j = 1;
 			while(command[i] != '\0')
@@ -162,21 +170,27 @@ struct Reply process_command(const int sockfd, char* command)
 				i++;
 			}
 			name[j] = '\0';
-			printf("PM Test: %s\n", name);
 			break;
 		}
 
+		//Lines 177-218 check for and handle user command DELETE
 		i = 0;
 		word = "DELETE";
+
+		//Checks character by character if command == 'DELETE'
 		for(i = 0; command[i] != '\0' || i < 6; i++)
 		{
 			if(word[i] != command[i])
 				break;
 		}
+
+		//If i != 6, we know command was not 'DELETE'
 		if(i == 6)
 		{
+			//Check if command is valid format: DELETE <name>
 			if(command[i] != '\0')
 			{
+				//Skip the space character in command
 				i++;
 			}
 			else
@@ -184,6 +198,8 @@ struct Reply process_command(const int sockfd, char* command)
 				reply.status = FAILURE_INVALID;
 				return reply;
 			}
+
+			//Format message to server in form: 'd<name>'
 			name[0] = 'd';
 			int j = 1;
 			while(command[i] != '\0')
@@ -198,21 +214,26 @@ struct Reply process_command(const int sockfd, char* command)
 				i++;
 			}
 			name[j] = '\0';
-			printf("PM Test: %s\n", name);
 			break;
 		}
 
+		//Lines 221-261 check for and handle user command JOIN
 		i = 0;
 		word = "JOIN";
+
+		//Checks character by character if command == 'JOIN'
 		for(i = 0; command[i] != '\0' || i < 4; i++)
 		{
 			if(word[i] != command[i])
 				break;
 		}
+
+		//If i != 4, we know command was not 'JOIN'
 		if(i == 4)
 		{
 			if(command[i] != '\0')
 			{
+				//Skip over the space character in command
 				i++;
 			}
 			else
@@ -220,6 +241,8 @@ struct Reply process_command(const int sockfd, char* command)
 				reply.status = FAILURE_INVALID;
 				return reply;
 			}
+
+			//Format message to server in form: 'j<name>'
 			name[0] = 'j';
 			int j = 1;
 			while(command[i] != '\0')
@@ -234,17 +257,22 @@ struct Reply process_command(const int sockfd, char* command)
 				i++;
 			}
 			name[j] = '\0';
-			printf("PM Test: %s\n", name);
 			break;
 		}
 
+		//Lines 264-287 check for and handle user command LIST
 		i = 0;
 		word = "LIST";
+
+		//Checks character by character if command == 'LIST'
 		for(i = 0; command[i] != '\0' || i < 4; i++)
 		{
 			if(word[i] != command[i])
 				break;
 		}
+
+		//LIST does not require additional arguments, if there are any
+		//extra characters this is invalid formatting
 		if(command[i] != '\0')
 		{
 			reply.status = FAILURE_INVALID;
@@ -252,6 +280,7 @@ struct Reply process_command(const int sockfd, char* command)
 		}
 		else
 		{
+			//Message to Server is simply 'l'
 			name[0] = 'l';
 			name[1] = '\0';
 			break;
@@ -264,17 +293,15 @@ struct Reply process_command(const int sockfd, char* command)
 	// After you create the message, you need to send it to the
 	// server and receive a result from the server.
 	// ------------------------------------------------------------
+	//Sends formatted message to server
 	if(send(sockfd, name, sizeof(name), 0) == -1)
 		perror("Send");
 	
+	//Receives response from server based on user message
 	char buffer[256];
 	if(recv(sockfd, buffer, sizeof(buffer), 0) == -1)
 		perror("Client recv");
 	reply = *(struct Reply *)buffer;
-	if(reply.status == SUCCESS)
-		printf("SUCCESSSSSSS\n");
-	else
-		printf("Not successful\n");
 
 	// ------------------------------------------------------------
 	// GUIDE 3:
@@ -318,29 +345,9 @@ struct Reply process_command(const int sockfd, char* command)
     // as "r1,r2,r3,"
 	// ------------------------------------------------------------
 
-	// REMOVE below code and write your own Reply.
-	
-	// reply.status = SUCCESS;
-	// reply.num_member = 5;
-	// reply.port = 1024;
+	//Returns response from server
 	return reply;
 }
-
-// void receive_loop(const int sockfd)
-// {
-// 	printf("Receiving!\n");
-// 	char displayBuffer[256];
-// 	int bytes;
-// 	while((bytes = recv(sockfd, displayBuffer, sizeof(displayBuffer), 0)) > 0)
-// 	{
-// 		printf("Loop iteration!\n");
-// 		display_message(displayBuffer);
-// 	}
-// 	if(bytes == -1)
-// 	{
-// 		perror("chatmode recv");
-// 	}
-// }
 
 /* 
  * Get into the chat mode
@@ -356,10 +363,14 @@ void process_chatmode(const char* host, const int port)
 	// to the server using host and port.
 	// You may re-use the function "connect_to".
 	// ------------------------------------------------------------
+	//Converts integer port to cstring
 	char portStr[10];
 	snprintf(portStr, 10, "%d", port);
-	printf("the new port: %s\n", portStr);
+	
+	//Connects to given host and port
 	int sockfd = connect_to(host, portStr);
+
+	//Used for poll to allow proper chatroom functionality
 	int pollVal;
 	struct pollfd fds[2];
 	int timeout;
@@ -376,30 +387,37 @@ void process_chatmode(const char* host, const int port)
 	int bytes;
 	while(1)
 	{
+		//Setting up file descriptor set to look for reads from sockfd
 		fds[0].fd = sockfd;
 		fds[0].events = 0;
 		fds[0].events |= POLLIN;
+
+		//Setting up file descriptor set to look for reads from STDIN
 		fds[1].fd = fd;
 		fds[1].events = 0;
 		fds[1].events |= POLLIN;
 
+		//Setting up poll timeout and polling file descriptors
 		timeout = 2000;
-
 		pollVal = poll(fds, 2, timeout);
 
+		//File descriptors did not receive any reads
 		if(pollVal == 0)
 		{
 			printf("");
 		}
 		else
 		{
-			//printf("else\n");
+			//Checks if the sockfd received a read event
 			if(fds[0].revents && POLLIN)
 			{
+				//Reads and displays response from server
 				char displayBuffer[256];
 				if(recv(sockfd, displayBuffer, sizeof(displayBuffer), 0) == -1)
 					perror("Chatmode Recv");
 				display_message(displayBuffer);
+
+				//If message is the room closing, closes the socket file descriptor
 				if(strcmp(displayBuffer, "Warning, chat room closed\n") == 0)
 				{
 					close(sockfd);
@@ -408,62 +426,13 @@ void process_chatmode(const char* host, const int port)
 			}
 			else
 			{
+				//If STDIN received a read, takes this message and sends it to server
 				memset((void *) sendbuff, 0, 256);
 				bytes = read(fd, (void *) sendbuff, 255);
 				if(send(sockfd, sendbuff, sizeof(sendbuff), 0) == -1)
 					perror("Chatmode Send");
 			}
 		}
-
-
-		// if(pollVal == 0)
-		// {
-		// 	printf("if\n");
-		// 	char sendBuffer[256];
-		// 	get_message(sendBuffer, sizeof(sendBuffer));
-		// 	if(send(sockfd, sendBuffer, sizeof(sendBuffer), 0) == -1)
-		// 		perror("Chatmode Send");
-		// }
-		// else
-		// {
-		// 	printf("else\n");
-		// 	char displayBuffer[256];
-		// 	if(recv(sockfd, displayBuffer, sizeof(displayBuffer), 0) == -1)
-		// 		perror("Chatmode Recv");
-			
-		// 	display_message(displayBuffer);
-		// }
-
-
-		// pthread_t recv_thread;
-		// pthread_create(&recv_thread, NULL, receive_loop, sockfd);
-		// pthread_detach(recv_thread);
-
-
-		// int bytes = 1;
-		// while(bytes > 0)
-		// {
-		// 	char displayBuffer[256];
-		// 	bytes = recv(sockfd, displayBuffer, sizeof(displayBuffer), 0);
-		// 	if(bytes == -1)
-		// 	{
-		// 		perror("Chatmode Recv");
-		// 		break;
-		// 	}
-
-		// 	display_message(displayBuffer);
-		// }
-
-		// int status;
-		// while((status = recv(sockfd, displayBuffer, sizeof(displayBuffer), 0)) != 0)
-		// {
-		// 	if(status == -1)
-		// 	{
-		// 		perror("Chatmode recv");
-		// 	}
-		// 	display_message(displayBuffer);
-		// }
-		
 	}
 
     // ------------------------------------------------------------
