@@ -1,8 +1,30 @@
 #include <iostream>
 #include <string>
+#include <vector>
 #include <unistd.h>
 #include <grpc++/grpc++.h>
+#include <google/protobuf/util/time_util.h>
+
+#include "sns.grpc.pb.h"
 #include "client.h"
+
+using google::protobuf::Timestamp;
+using google::protobuf::Duration;
+using grpc::Channel;
+using grpc::ClientContext;
+using grpc::ClientReader;
+using grpc::ClientReaderWriter;
+using grpc::ClientWriter;
+using grpc::Status;
+using csce438::Message;
+using csce438::Request;
+using csce438::Reply;
+using csce438::SNSService;
+
+using std::string;
+using std::cout;
+using std::endl;
+using std::vector;
 
 class Client : public IClient
 {
@@ -23,7 +45,7 @@ class Client : public IClient
         
         // You can have an instance of the client stub
         // as a member variable.
-        //std::unique_ptr<NameOfYourStubClass::Stub> stub_;
+        std::unique_ptr<SNSService::Stub> stub_;
 };
 
 int main(int argc, char** argv) {
@@ -63,6 +85,16 @@ int Client::connectTo()
     // a member variable in your own Client class.
     // Please refer to gRpc tutorial how to create a stub.
 	// ------------------------------------------------------------
+    string param = hostname + ":" + port;
+    this->stub_ = (SNSService::NewStub(grpc::CreateChannel(param, grpc::InsecureChannelCredentials())));
+
+    ClientContext cc;
+    Reply rep;
+    Request req;
+    req.set_username(username);
+    //req.set_arguments(1, "LOGIN");
+
+    Status status = stub_->Login(&cc, req, &rep);
 
     return 1; // return 1 if success, otherwise return -1
 }
@@ -82,7 +114,43 @@ IReply Client::processCommand(std::string& input)
     // TIMELINE
 	//
 	// ------------------------------------------------------------
-	
+	IReply ire;
+    
+    string cmd = "";
+    int i;
+    for(i = 0; i < input.length(); i++)
+    {
+        if(input.at(i) == ' ')
+            break;
+        cmd += input.at(i);
+    }
+    
+    if(cmd == "FOLLOW")
+    {
+        ClientContext sc;
+        Reply rep;
+
+        vector<string> vec;
+        vec.push_back("cheeto");
+        //Request req(this->username);
+
+        //Status status = stub_->Follow(&sc, &req, &rep);
+    }
+/**
+* - FOLLOW/UNFOLLOW/TIMELINE command:
+ * IReply ireply;
+ * ireply.grpc_status = return value of a service method
+ * ireply.comm_status = one of values in IStatus enum
+ *
+ * - LIST command:
+ * IReply ireply;
+ * ireply.grpc_status = return value of a service method
+ * ireply.comm_status = one of values in IStatus enum
+ * reply.users = list of all users who connected to the server at least onece
+ * reply.following_users = list of users who current who current user are following;
+ */
+
+
     // ------------------------------------------------------------
 	// GUIDE 2:
 	// Then, you should create a variable of IReply structure
@@ -114,7 +182,7 @@ IReply Client::processCommand(std::string& input)
     // "following_users" member variable of IReply.
     // ------------------------------------------------------------
     
-    IReply ire;
+    //IReply ire;
     return ire;
 }
 

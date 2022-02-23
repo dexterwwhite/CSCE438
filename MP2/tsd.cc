@@ -3,6 +3,7 @@
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
 
+#include <vector>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -28,8 +29,15 @@ using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
 
+using std::cout;
+using std::endl;
+using std::string;
+using std::pair;
+
 class SNSServiceImpl final : public SNSService::Service {
   
+  vector<pair<vector<string>, vector<string>>> users;
+
   Status List(ServerContext* context, const Request* request, Reply* reply) override {
     // ------------------------------------------------------------
     // In this function, you are to write code that handles 
@@ -45,6 +53,8 @@ class SNSServiceImpl final : public SNSService::Service {
     // request from a user to follow one of the existing
     // users
     // ------------------------------------------------------------
+    //cout << "User: " << request->username << endl;
+    //cout << "MSG: " << request->arguments << endl;
     return Status::OK; 
   }
 
@@ -63,6 +73,7 @@ class SNSServiceImpl final : public SNSService::Service {
     // a new user and verify if the username is available
     // or already taken
     // ------------------------------------------------------------
+    cout << "User: " << request->username() << endl;
     return Status::OK;
   }
 
@@ -83,6 +94,23 @@ void RunServer(std::string port_no) {
   // which would start the server, make it listen on a particular
   // port number.
   // ------------------------------------------------------------
+  
+  //READ FROM TXT FILE TO SET UP VEC OF USERS
+  //vec is vector<Pair<Vector<String>, Vector<String>>
+  //first vector in pair is following
+  //second vector is who user is followed by
+  //VEC is format <user>, following1, following2
+
+
+  string server_addr = "0.0.0.0:" + port_no;
+  SNSServiceImpl service;
+
+  ServerBuilder builder;
+  builder.AddListeningPort(server_addr, grpc::InsecureServerCredentials());
+  builder.RegisterService(&service);
+  std::unique_ptr<Server> server(builder.BuildAndStart());
+  cout << "Server is listening on " << port_no << endl;
+  server->Wait();
 }
 
 int main(int argc, char** argv) {
