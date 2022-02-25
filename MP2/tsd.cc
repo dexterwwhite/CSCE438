@@ -4,6 +4,7 @@
 #include <google/protobuf/duration.pb.h>
 
 #include <vector>
+#include <mutex>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -32,11 +33,17 @@ using csce438::SNSService;
 using std::cout;
 using std::endl;
 using std::string;
+using std::vector;
 using std::pair;
+using std::mutex;
+using std::unique_lock;
+
+mutex mtx;
+vector<pair<vector<string>, vector<string>>> users;
+std::ifstream ifs;
+std::ofstream ofs;
 
 class SNSServiceImpl final : public SNSService::Service {
-  
-  vector<pair<vector<string>, vector<string>>> users;
 
   Status List(ServerContext* context, const Request* request, Reply* reply) override {
     // ------------------------------------------------------------
@@ -74,6 +81,52 @@ class SNSServiceImpl final : public SNSService::Service {
     // or already taken
     // ------------------------------------------------------------
     cout << "User: " << request->username() << endl;
+
+    //File database setup
+    {
+      unique_lock<mutex> loginLock(mtx);
+      ifs.open("database.txt");
+      bool found = false;
+      //ofs.open("database.txt");
+      string line;
+
+      int count = 1;
+      while(!ifs.eof())
+      {
+        getline(ifs, line);
+        cout << "Count: " << count++ << endl;
+        cout << "Line: " << line << endl;
+
+        if(line == request->username())
+        {
+          found = true;
+          break;
+        }
+
+        line.clear();
+      }
+      ifs.close();
+
+      if(!found)
+      {
+        ofs.open("database.txt", std::ofstream::out | std::ofstream::app);
+        ofs << "\n\n";
+        ofs << request->username() << "\n";
+        ofs << "Following: " << request->username() << " @****\n";
+        ofs << "Followers: " << request->username() << " @****\n";
+        ofs << "\n";
+        ofs << "@**@**";
+        ofs.close();
+
+        vector<string> following;
+        vector<string> followers;
+        following.push_back(request->username());
+        followers.push_back(request->username());
+        pair<vector<string>, vector<string>> userFollows(following, followers);
+        users.push_back(userFollows);
+      }
+      //ofs.close();
+    }
     return Status::OK;
   }
 
@@ -100,7 +153,11 @@ void RunServer(std::string port_no) {
   //first vector in pair is following
   //second vector is who user is followed by
   //VEC is format <user>, following1, following2
+  users.size();
 
+  //Setting up server "database" file IOstreams
+  //ifs.open("database.txt");
+  //ofs.open("database.txt");
 
   string server_addr = "0.0.0.0:" + port_no;
   SNSServiceImpl service;
@@ -114,18 +171,46 @@ void RunServer(std::string port_no) {
 }
 
 int main(int argc, char** argv) {
-  
+  string check;
   std::string port = "3010";
+  bool resetDB = false;
   int opt = 0;
-  while ((opt = getopt(argc, argv, "p:")) != -1){
+  while ((opt = getopt(argc, argv, "p:r:")) != -1){
     switch(opt) {
       case 'p':
           port = optarg;
+          break;
+      case 'r':
+          check = optarg;
+          if(check == "RESET")
+            resetDB = true;
           break;
       default:
 	         std::cerr << "Invalid Command Line Argument\n";
     }
   }
+
+  if(resetDB)
+  {
+    ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
+    ofs << "USERS:";
+    ofs.close();
+    cout << "Database has been reset!" << endl;
+  }
+
+  ifs.open("database.txt");
+  if(!ifs.is_open())
+  {
+    ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
+    ofs << "USERS:";
+    ofs.close();
+    cout << "Database was not present, new database created!" << endl;
+  }
+  else
+  {
+    ifs.close();
+  }
+
   RunServer(port);
   return 0;
 }

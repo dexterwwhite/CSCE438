@@ -96,7 +96,10 @@ int Client::connectTo()
 
     Status status = stub_->Login(&cc, req, &rep);
 
-    return 1; // return 1 if success, otherwise return -1
+    if(status == Status::OK)
+        return 1;
+    else
+        return -1; // return 1 if success, otherwise return -1
 }
 
 IReply Client::processCommand(std::string& input)
@@ -135,6 +138,22 @@ IReply Client::processCommand(std::string& input)
         //Request req(this->username);
 
         //Status status = stub_->Follow(&sc, &req, &rep);
+    }
+    else if(cmd == "UNFOLLOW")
+    {
+        cout << "unfollow!" << endl;
+    }
+    else if(cmd == "LIST")
+    {
+        cout << "LIST!" << endl;
+    }
+    else if(cmd == "TIMELINE")
+    {
+        cout << "Timeline!" << endl;
+    }
+    else
+    {
+        cout << "Not a command!" << endl;
     }
 /**
 * - FOLLOW/UNFOLLOW/TIMELINE command:
