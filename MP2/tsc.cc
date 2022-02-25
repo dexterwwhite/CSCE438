@@ -174,7 +174,54 @@ IReply Client::processCommand(std::string& input)
     }
     else if(cmd == "UNFOLLOW")
     {
-        cout << "unfollow!" << endl;
+        string fUser = "";
+        for(int i = 9; i < input.length(); i++)
+        {
+            fUser += input.at(i);
+        }
+
+        ClientContext sc;
+        Reply rep;
+        Request req;
+        req.set_username(username);
+        req.add_arguments(fUser);
+
+        Status status = stub_->UnFollow(&sc, req, &rep);
+
+        if(status.ok())
+        {
+            ire.grpc_status = status;
+            if(rep.all_users_size() > 0)
+            {
+                if(rep.all_users(0) == "failed-notfollow")
+                {
+                    ire.comm_status = FAILURE_INVALID_USERNAME;
+                    return ire;
+                }
+                else if(rep.all_users(0) == "failed-DNE")
+                {
+                    ire.comm_status = FAILURE_NOT_EXISTS;
+                    return ire;
+                }
+                else if(rep.all_users(0) == "failed-self")
+                {
+                    ire.comm_status = FAILURE_INVALID_USERNAME;
+                    return ire;
+                }
+            }
+            else
+            {
+                ire.comm_status = SUCCESS;
+                return ire;
+            }
+        }
+        else
+        {
+            cout << status.error_code() << endl;
+            cout << status.error_message() << endl;
+            ire.grpc_status = status;
+            return ire;
+        }
     }
     else if(input == "LIST")
     {

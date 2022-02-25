@@ -197,6 +197,153 @@ class SNSServiceImpl final : public SNSService::Service {
     // request from a user to unfollow one of his/her existing
     // followers
     // ------------------------------------------------------------
+    if(request->username() == request->arguments(0))
+    {
+      reply->add_all_users("failed-self");
+      return Status::OK;
+    }
+
+    for(int i = 0; i < users.size(); i++)
+    {
+      cout << "User: " << users.at(i).first.at(0) << endl;
+      for(int j = 0; j < users.at(i).first.size(); j++)
+      {
+        cout << "FOLLOWING: " << users.at(i).first.at(j) << endl;
+      }
+      for(int j = 0; j < users.at(i).second.size(); j++)
+      {
+        cout << "FOLLOWERS: " << users.at(i).second.at(j) << endl;
+      }
+    }
+
+    bool exists = false;
+    bool isFollowing = false;
+
+    int index = 0;
+    int followingPos = 0;
+    int fIndex = 0;
+    int followedPos = 0;
+
+    {
+      unique_lock<mutex> unfollowLock(mtx);
+      for(int i = 0; i < users.size(); i++)
+      {
+        if(request->username() == users.at(i).first.at(0))
+        {
+          //Sets index for easy updating of users vector later
+          index = i;
+          for(int j = 0; j < users.at(i).first.size(); j++)
+          {
+            //If user already follows user-to-be-followed, FOLLOW command fails
+            if(request->arguments(0) == users.at(i).first.at(j))
+            {
+              isFollowing = true;
+              followingPos = j;
+              break;
+            }
+          }
+        }
+
+        //Finds whether the user-to-be-followed exists, updates fIndex if so
+        if(request->arguments(0) == users.at(i).first.at(0))
+        {
+          exists = true;
+          fIndex = i;
+
+          for(int j = 0; j < users.at(i).second.size(); j++)
+          {
+            //If user already follows user-to-be-followed, FOLLOW command fails
+            if(request->username() == users.at(i).second.at(j))
+            {
+              followedPos = j;
+              break;
+            }
+          }
+        }
+      }
+
+      if(!exists)
+      {
+        reply->add_all_users("failed-DNE");
+      }
+      else if(!isFollowing)
+      {
+        reply->add_all_users("failed-notfollow");
+      }
+      else
+      {
+        users.at(index).first.erase(users.at(index).first.begin() + followingPos);
+        users.at(fIndex).second.erase(users.at(fIndex).second.begin() + followedPos);
+
+        for(int i = 0; i < users.size(); i++)
+        {
+          cout << "User: " << users.at(i).first.at(0) << endl;
+          for(int j = 0; j < users.at(i).first.size(); j++)
+          {
+            cout << "FOLLOWING: " << users.at(i).first.at(j) << endl;
+          }
+          for(int j = 0; j < users.at(i).second.size(); j++)
+          {
+            cout << "FOLLOWERS: " << users.at(i).second.at(j) << endl;
+          }
+        }
+
+        ifs.open("database.txt");
+        index = 0;
+        int pos, fPos, removeIndex;
+        string line;
+        vector<string> db;
+
+        while(!ifs.eof())
+        {
+          getline(ifs, line);
+          db.push_back(line);
+
+          if(line == request->username())
+          {
+            pos = index + 1;
+          }
+          else if(line == request->arguments(0))
+          {
+            fPos = index + 2;
+          }
+
+          index++;
+          line.clear();
+        }
+        ifs.close();
+
+        ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
+        for(int i = 0; i < db.size(); i++)
+        {
+          if(i == pos)
+          {
+            string addition = db.at(i);
+            removeIndex = addition.find(request->arguments(0));
+            int offset = removeIndex + request->arguments(0).length() + 1;
+            addition = addition.substr(0, removeIndex - 5) + addition.substr(offset, addition.length() - offset) + "\n";
+            ofs << addition;
+          }
+          else if(i == fPos)
+          {
+            string addition = db.at(i);
+            removeIndex = addition.find(request->username());
+            int offset = removeIndex + request->username().length() + 1;
+            addition = addition.substr(0, removeIndex - 5) + addition.substr(offset, addition.length() - offset) + "\n";
+            ofs << addition;
+          }
+          else
+          {
+            if(i != db.size() - 1)
+              ofs << db.at(i) << "\n";
+            else
+              ofs << db.at(i);
+          }
+        }
+
+        ofs.close();
+      }
+    }
     return Status::OK;
   }
   
@@ -220,8 +367,6 @@ class SNSServiceImpl final : public SNSService::Service {
       while(!ifs.eof())
       {
         getline(ifs, line);
-        cout << "Count: " << count++ << endl;
-        cout << "Line: " << line << endl;
 
         if(line == request->username())
         {
