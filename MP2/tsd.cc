@@ -51,6 +51,26 @@ class SNSServiceImpl final : public SNSService::Service {
     // LIST request from the user. Ensure that both the fields
     // all_users & following_users are populated
     // ------------------------------------------------------------
+
+    //Acquires mutex because accessing shared resource
+    {
+      unique_lock<mutex> listLock(mtx);
+
+      //Searches global vector for users
+      for(int i = 0; i < users.size(); i++)
+      {
+        //First user in each vector is the actual user
+        if(request->username() == users.at(i).first.at(0))
+        {
+          for(int j = 0; j < users.at(i).second.size(); j++)
+          {
+            reply->add_following_users(users.at(i).second.at(j));
+          }
+        }
+        reply->add_all_users(users.at(i).first.at(0));
+      }
+    }
+
     return Status::OK;
   }
 
@@ -60,8 +80,109 @@ class SNSServiceImpl final : public SNSService::Service {
     // request from a user to follow one of the existing
     // users
     // ------------------------------------------------------------
-    //cout << "User: " << request->username << endl;
-    //cout << "MSG: " << request->arguments << endl;
+
+    //Bool for whether the user that was requested to be follow actually exists
+    bool exists = false;
+    bool alreadyFollows = false;
+
+    //Used to keep track of vector positions of user, user being followed
+    int index = 0;
+    int fIndex = 0;
+
+    //Acquires mutex due to accessing shared resources
+    {
+      unique_lock<mutex> followLock(mtx);
+      for(int i = 0; i < users.size(); i++)
+      {
+        if(request->username() == users.at(i).first.at(0))
+        {
+          //Sets index for easy updating of users vector later
+          index = i;
+          for(int j = 0; j < users.at(i).first.size(); j++)
+          {
+            //If user already follows user-to-be-followed, FOLLOW command fails
+            if(request->arguments(0) == users.at(i).first.at(j))
+            {
+              reply->add_all_users("failed-follows");
+              return Status::OK;
+            }
+          }
+        }
+
+        //Finds whether the user-to-be-followed exists, updates fIndex if so
+        if(request->arguments(0) == users.at(i).first.at(0))
+        {
+          exists = true;
+          fIndex = i;
+        }
+      }
+
+      if(!exists)
+      {
+        reply->add_all_users("failed-DNE");
+      }
+      else
+      {
+        users.at(index).first.push_back(request->arguments(0));
+        users.at(fIndex).second.push_back(request->username());
+
+        ifs.open("database.txt");
+        index = 0;
+        int pos, fPos;
+        string line;
+        vector<string> db;
+
+        while(!ifs.eof())
+        {
+          getline(ifs, line);
+          db.push_back(line);
+
+          if(line == request->username())
+          {
+            pos = index + 1;
+          }
+          else if(line == request->arguments(0))
+          {
+            fPos = index + 2;
+          }
+
+          index++;
+          line.clear();
+        }
+        ifs.close();
+
+        ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
+        for(int i = 0; i < db.size(); i++)
+        {
+          if(i == pos)
+          {
+            string addition = db.at(i).substr(0, db.at(i).length() - 5);
+            addition += "**** " + request->arguments(0) + " @****\n";
+            ofs << addition;
+          }
+          else if(i == fPos)
+          {
+            string addition = db.at(i).substr(0, db.at(i).length() - 5);
+            addition += "**** " + request->username() + " @****\n";
+            ofs << addition;
+          }
+          else
+          {
+            ofs << db.at(i) << "\n";
+          }
+        }
+
+        ofs.close();
+      }
+    }
+
+    
+    
+    if(alreadyFollows)
+    {
+      reply->add_all_users("failed-follows");
+    }
+
     return Status::OK; 
   }
 
@@ -155,10 +276,6 @@ void RunServer(std::string port_no) {
   //VEC is format <user>, following1, following2
   users.size();
 
-  //Setting up server "database" file IOstreams
-  //ifs.open("database.txt");
-  //ofs.open("database.txt");
-
   string server_addr = "0.0.0.0:" + port_no;
   SNSServiceImpl service;
 
@@ -190,6 +307,7 @@ int main(int argc, char** argv) {
     }
   }
 
+  //Wipes any data from the database, if needed
   if(resetDB)
   {
     ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
@@ -198,6 +316,7 @@ int main(int argc, char** argv) {
     cout << "Database has been reset!" << endl;
   }
 
+  //Checks if a database file exists on start, makes a new one if needed
   ifs.open("database.txt");
   if(!ifs.is_open())
   {
@@ -208,6 +327,7 @@ int main(int argc, char** argv) {
   }
   else
   {
+    //Fills global vector with pre-existing data, to handle persistance of data
     ifs.close();
   }
 

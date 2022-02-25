@@ -96,7 +96,7 @@ int Client::connectTo()
 
     Status status = stub_->Login(&cc, req, &rep);
 
-    if(status == Status::OK)
+    if(status.ok())
         return 1;
     else
         return -1; // return 1 if success, otherwise return -1
@@ -130,30 +130,95 @@ IReply Client::processCommand(std::string& input)
     
     if(cmd == "FOLLOW")
     {
+        string fUser = "";
+        for(int i = 7; i < input.length(); i++)
+        {
+            fUser += input.at(i);
+        }
+
         ClientContext sc;
         Reply rep;
+        Request req;
+        req.set_username(username);
+        req.add_arguments(fUser);
 
-        vector<string> vec;
-        vec.push_back("cheeto");
-        //Request req(this->username);
+        Status status = stub_->Follow(&sc, req, &rep);
 
-        //Status status = stub_->Follow(&sc, &req, &rep);
+        if(status.ok())
+        {
+            ire.grpc_status = status;
+            if(rep.all_users_size() > 0)
+            {
+                if(rep.all_users(0) == "failed-follows")
+                {
+                    ire.comm_status = FAILURE_INVALID_USERNAME;
+                    return ire;
+                }
+                else if(rep.all_users(0) == "failed-DNE")
+                {
+                    ire.comm_status = FAILURE_NOT_EXISTS;
+                    return ire;
+                }
+            }
+            else
+            {
+                ire.comm_status = SUCCESS;
+                return ire;
+            }
+        }
+        else
+        {
+            ire.grpc_status = status;
+            return ire;
+        }
     }
     else if(cmd == "UNFOLLOW")
     {
         cout << "unfollow!" << endl;
     }
-    else if(cmd == "LIST")
+    else if(input == "LIST")
     {
-        cout << "LIST!" << endl;
+        ClientContext cc;
+        Reply rep;
+        Request req;
+        req.set_username(username);
+        //req.set_arguments(1, "LOGIN");
+
+        Status status = stub_->List(&cc, req, &rep);
+        if(status.ok())
+        {
+            vector<string> all;
+            vector<string> following;
+            ire.grpc_status = status;
+            ire.comm_status = SUCCESS;
+            for(int i = 0; i < rep.all_users_size(); i++)
+            {
+                all.push_back(rep.all_users(i));
+            }
+
+            for(int i = 0; i < rep.following_users_size(); i++)
+            {
+                following.push_back(rep.following_users(i));
+            }
+            ire.all_users = all;
+            ire.following_users = following;
+            return ire;
+        }
+        else
+        {
+            ire.grpc_status = status;
+            return ire;
+        }
     }
-    else if(cmd == "TIMELINE")
+    else if(input == "TIMELINE")
     {
         cout << "Timeline!" << endl;
     }
     else
     {
-        cout << "Not a command!" << endl;
+        ire.grpc_status = Status::OK;
+        ire.comm_status = FAILURE_INVALID;
+        return ire;
     }
 /**
 * - FOLLOW/UNFOLLOW/TIMELINE command:
