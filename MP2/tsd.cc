@@ -3,6 +3,7 @@
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
 
+#include <sstream>
 #include <vector>
 #include <mutex>
 #include <fstream>
@@ -37,6 +38,7 @@ using std::vector;
 using std::pair;
 using std::mutex;
 using std::unique_lock;
+using std::istringstream;
 
 mutex mtx;
 vector<pair<vector<string>, vector<string>>> users;
@@ -168,7 +170,10 @@ class SNSServiceImpl final : public SNSService::Service {
           }
           else
           {
-            ofs << db.at(i) << "\n";
+            if(i != db.size() - 1)
+              ofs << db.at(i) << "\n";
+            else
+              ofs << db.at(i);
           }
         }
 
@@ -328,6 +333,57 @@ int main(int argc, char** argv) {
   else
   {
     //Fills global vector with pre-existing data, to handle persistance of data
+    string line;
+
+    while(!ifs.eof())
+    {
+      getline(ifs, line);
+      if(line.length() >= 15)
+      {
+        if((line.substr(0, 10) == "Following:") && (line.substr(line.length() - 5) == "@****"))
+        {
+          pair<vector<string>, vector<string>> newUser;
+          istringstream iss(line);
+          string name;
+          vector<string> following;
+          vector<string> followers;
+
+          iss >> name;
+          name.clear();
+          while(!iss.eof())
+          {
+            iss >> name;
+            if(name != "****" || name != "@****")
+            {
+              following.push_back(name);
+            }
+            name.clear();
+          }
+
+          newUser.first = following;
+          newUser.second = followers;
+          users.push_back(newUser);
+        }
+        else if((line.substr(0, 10) == "Followers:") && (line.substr(line.length() - 5) == "@****"))
+        {
+          istringstream iss(line);
+          string name;
+
+          iss >> name;
+          name.clear();
+          while(!iss.eof())
+          {
+            iss >> name;
+            if(name != "****" || name != "@****")
+            {
+              users.back().second.push_back(name);
+            }
+            name.clear();
+          }
+        }
+      }
+    }
+
     ifs.close();
   }
 
