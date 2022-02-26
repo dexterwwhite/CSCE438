@@ -1,9 +1,14 @@
+#include <ctime>
 #include <iostream>
 #include <string>
 #include <vector>
+#include <poll.h>
+#include <thread>
 #include <unistd.h>
 #include <grpc++/grpc++.h>
 #include <google/protobuf/util/time_util.h>
+#include <google/protobuf/timestamp.pb.h>
+#include <google/protobuf/duration.pb.h>
 
 #include "sns.grpc.pb.h"
 #include "client.h"
@@ -25,6 +30,7 @@ using std::string;
 using std::cout;
 using std::endl;
 using std::vector;
+using std::thread;
 
 class Client : public IClient
 {
@@ -259,7 +265,9 @@ IReply Client::processCommand(std::string& input)
     }
     else if(input == "TIMELINE")
     {
-        cout << "Timeline!" << endl;
+        ire.grpc_status = Status::OK;
+        ire.comm_status = SUCCESS;
+        return ire;
     }
     else
     {
@@ -317,8 +325,109 @@ IReply Client::processCommand(std::string& input)
     return ire;
 }
 
+void timelineThread(std::shared_ptr<ClientReaderWriter<Message, Message>> crw)
+{
+    while(true)
+    {
+        cout << "Am i blocking?" << endl;
+        Message post;
+        if(crw->Read(&post))
+        {
+            cout << post.username() << post.msg() << endl;
+        }
+    }
+}
+
 void Client::processTimeline()
 {
+    ClientContext cc;
+    std::shared_ptr<ClientReaderWriter<Message, Message>> crw(stub_->Timeline(&cc));
+    Message m1;
+    m1.set_username(username);
+    string mes1 = "conn-establish";
+    m1.set_msg(mes1);
+    crw->Write(m1);
+    //crw->WritesDone();
+    
+    // Status status = crw->Finish();
+    // cout << "MAde it here3" << endl;
+
+    Message tlmsg;
+    while(crw->Read(&tlmsg))
+    {
+        if(tlmsg.username() != "server--end**")
+        {
+            cout << tlmsg.username();
+            cout << tlmsg.msg();
+            cout << endl;
+        }
+        else
+        {
+            break;
+        }
+    }
+    //status = crw->Finish();
+
+    // //Status status = stub_->Timeline(&cc, &crw);
+    // Message m1;
+    // m1.set_username(username);
+    // string messo = "Hi friend!";
+    // m1.set_msg(messo);
+
+    // Timestamp ts = google::protobuf::util::TimeUtil::GetCurrentTime();
+    // //ts->GetCurrentTime();
+    // //Timestamp ts = google::protobuf::util::time_util::TimeTToTimestamp(rawtime);
+    // m1.set_allocated_timestamp(&ts);
+
+    // crw->Write(m1);
+
+    vector<thread> receiver;
+    receiver.emplace_back(timelineThread, crw);
+
+    //thread receiver(Client::timelineThread, crw);
+
+    // int fd = 0;
+    // struct pollfd fds[1];
+    // int timeout, pollval;
+
+    cout << "Made it to here" << endl;
+    while(true)
+    {
+        cout << "Entered loop!" << endl;
+        // fds[0].fd = fd;
+        // fds[0].events = 0;
+        // fds[0].events |= POLLIN;
+        // timeout = 1000;
+
+        // pollval = poll(fds, 1, timeout);
+
+        // if(pollval == 0)
+        // {
+        //     // cout << "READ!" << endl;
+        //     // Message post;
+        //     // if(crw->Read(&post))
+        //     // {
+        //     //     cout << post.username() << post.msg() << endl;
+        //     // }
+        //     cout << "";
+        // }
+        // else
+        // {
+        Message loopmsg;
+        string myMsg = getPostMessage();
+        loopmsg.set_username(username);
+        loopmsg.set_msg(myMsg);
+        Timestamp ts = google::protobuf::util::TimeUtil::GetCurrentTime();
+        loopmsg.set_allocated_timestamp(&ts);
+        crw->Write(loopmsg);
+        loopmsg.release_timestamp();
+        if(loopmsg.has_timestamp())
+        {
+            loopmsg.clear_timestamp();
+        }
+        //crw->WritesDone();
+        //}
+    }
 	// ------------------------------------------------------------
     // In this function, you are supposed to get into timeline mode.
     // You may need to call a service method to communicate with
