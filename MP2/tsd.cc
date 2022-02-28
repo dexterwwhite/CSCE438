@@ -136,6 +136,7 @@ class SNSServiceImpl final : public SNSService::Service {
         string line;
         vector<string> db;
 
+        cout << "Before loop" << endl;
         while(!ifs.eof())
         {
           getline(ifs, line);
@@ -154,6 +155,7 @@ class SNSServiceImpl final : public SNSService::Service {
           line.clear();
         }
         ifs.close();
+        cout << "After ifs loop" << endl;
 
         ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
         for(int i = 0; i < db.size(); i++)
@@ -180,14 +182,8 @@ class SNSServiceImpl final : public SNSService::Service {
         }
 
         ofs.close();
+        cout << "OFS has closed" << endl;
       }
-    }
-
-    
-    
-    if(alreadyFollows)
-    {
-      reply->add_all_users("failed-follows");
     }
 
     return Status::OK; 
@@ -392,8 +388,15 @@ class SNSServiceImpl final : public SNSService::Service {
         followers.push_back(request->username());
         pair<vector<string>, vector<string>> userFollows(following, followers);
         users.push_back(userFollows);
+
+        vector<string> userTL;
+        userTL.push_back(request->username());
+        timelines.push_back(userTL);
+
+        pair<string, ServerReaderWriter<Message, Message>*> userSRW;
+        userSRW.first = request->username();
+        timelineFDs.push_back(userSRW);
       }
-      //ofs.close();
     }
     return Status::OK;
   }
@@ -409,43 +412,75 @@ class SNSServiceImpl final : public SNSService::Service {
     stream->Read(&msg);
     cout << "Timeline user: " << msg.username() << endl;
     cout << "Timeline msg: " << msg.msg() << endl;
-    //Status status = stream->Finish();
 
+    //Status status = stream->Finish();
+    cout << "Okay" << endl;
     //if(status.ok())
     //{
       {
+        cout << "Funny" << endl;
         unique_lock<mutex> tlLock(mtx);
+
+        //pair<string, ServerReaderWriter<Message, Message>*> userSocket(msg.username(), stream);
+        //timelineFDs.push_back(userSocket);
+
+        cout << "Before loop" << endl;
         int index;
         for(int i = 0; i < timelines.size(); i++)
         {
           if(timelines.at(i).at(0) == msg.username())
           {
+            timelineFDs.at(i).second = stream;
             index = i;
             break;
           }
         }
 
+        cout << "timelines.at(index).size() == " << timelines.at(index).size() << endl;
         for(int i = timelines.at(index).size() - 1; i > 0; i--)
         {
           Message tlmsg;
           istringstream iss(timelines.at(index).at(i));
           string word;
-          string header = "";
           iss >> word;
 
           iss >> word;
-          header += word.substr(1, word.length() - 2);
-          iss >> word;
-          header += word;
+          string header = word.substr(1, word.length() - 2);
           tlmsg.set_username(header);
 
-          header = " >> ";
+          int start, end;
+          iss >> word;
+          start = iss.str().find(word);
+          while(true)
+          {
+            iss >> word;
+            if(word.find(")") != string::npos)
+            {
+
+              end = iss.str().find(word) + word.length();
+              break;
+            }
+          }
+          cout << "start: " << start << endl;
+          cout << "end: " << end << endl;
+          cout << "Str: " << iss.str() << endl;
+
+          string body = "";
+          for(int i = start; i < end; i++)
+          {
+            body += iss.str().at(i);
+          }
+
+          body += " >> ";
           while(!iss.eof())
           {
             iss >> word;
-            header += word + " ";
+            if(word.length() == 0)
+              break;
+            body += word + " ";
+            word.clear();
           }
-          tlmsg.set_msg(header);
+          tlmsg.set_msg(body);
           stream->Write(tlmsg);
         }
         Message ender;
@@ -472,7 +507,12 @@ class SNSServiceImpl final : public SNSService::Service {
           struct tm * timeinfo;
           timeinfo = localtime(&realTime);
           string time = asctime(timeinfo);
+          time = time.substr(0, time.length() - 1);
           cout << "loop time: " << time << endl;
+
+          string strMsg = "<> <";
+          strMsg += loopmsg.username() + "> (" + time + ") ";
+          strMsg += loopmsg.msg();
 
           Message newMsg;
           string firstPart = loopmsg.username();
@@ -480,7 +520,85 @@ class SNSServiceImpl final : public SNSService::Service {
           second += loopmsg.msg();
           newMsg.set_username(firstPart);
           newMsg.set_msg(second);
-          stream->Write(newMsg);
+
+          //Write to timeline.txt
+          {
+            unique_lock<mutex> tlWriteLock(mtx);
+
+            int sendIndex;
+            for(int i = 0; i < users.size(); i++)
+            {
+              if(users.at(i).first.at(0) == loopmsg.username())
+              {
+                sendIndex = i;
+                break;
+              }
+            }
+
+            cout << "Timelines before!" << endl;
+            for(int i = 0; i < timelines.size(); i++)
+            {
+              for(int j = 0; j < timelines.at(i).size(); j++)
+              {
+                cout << timelines.at(i).at(j) << endl;
+              }
+              cout << endl;
+            }
+
+            for(int i = 0; i < users.at(sendIndex).second.size(); i++)
+            {
+
+              for(int j = 0; j < timelines.size(); j++)
+              {
+                if(timelines.at(j).at(0) == users.at(sendIndex).second.at(i))
+                {
+                  if(timelines.at(j).size() > 20)
+                  {
+                    timelines.at(j).erase(timelines.at(j).begin() + 1);
+                  }
+                  timelines.at(j).push_back(strMsg);
+                }
+              }
+              
+              if(i > 0)
+              {
+                for(int j = 0; j < timelineFDs.size(); j++)
+                {
+                  if(timelineFDs.at(j).first == users.at(sendIndex).second.at(i))
+                  {
+                    timelineFDs.at(j).second->Write(newMsg);
+                  }
+                }
+              }
+            }
+
+            cout << "Timelines after!" << endl;
+            for(int i = 0; i < timelines.size(); i++)
+            {
+              for(int j = 0; j < timelines.at(i).size(); j++)
+              {
+                cout << timelines.at(i).at(j) << endl;
+              }
+              cout << endl;
+            }
+
+            ofs.open("timeline.txt", std::ofstream::out | std::ofstream::trunc);
+            for(int i = 0; i < timelines.size(); i++)
+            {
+              for(int j = 0; j < timelines.at(i).size(); j++)
+              {
+                if(j != 0)
+                  ofs << timelines.at(i).at(j);
+                else
+                  ofs << "<*" << timelines.at(i).at(j) << "*>" << "\n";
+              }
+              ofs << "\n";
+            }
+            ofs.close();
+          }
+
+          //send to everyone
+          //stream->Write(newMsg);
         }
       }
 
@@ -551,123 +669,127 @@ int main(int argc, char** argv) {
     }
   }
 
-  //Wipes any data from the database, if needed
-  if(resetDB)
   {
-    ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
-    ofs << "USERS:";
-    ofs.close();
-    ofs.open("timeline.txt", std::ofstream::out | std::ofstream::trunc);
-    ofs.close();
-    cout << "Databases have been reset!" << endl;
-  }
-
-  //Checks if a database file exists on start, makes a new one if needed
-  ifs.open("database.txt");
-  if(!ifs.is_open())
-  {
-    ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
-    ofs << "USERS:";
-    ofs.close();
-    cout << "User database was not present, new database created!" << endl;
-  }
-  else
-  {
-    //Fills global vector with pre-existing data, to handle persistance of data
-    string line;
-
-    while(!ifs.eof())
+    unique_lock<mutex> mainLock(mtx);
+    //Wipes any data from the database, if needed
+    if(resetDB)
     {
-      getline(ifs, line);
-      if(line.length() >= 15)
+      ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
+      ofs << "USERS:";
+      ofs.close();
+      ofs.open("timeline.txt", std::ofstream::out | std::ofstream::trunc);
+      ofs.close();
+      cout << "Databases have been reset!" << endl;
+    }
+    cout << "Before database!" << endl;
+
+    //Checks if a database file exists on start, makes a new one if needed
+    ifs.open("database.txt");
+    if(!ifs.is_open())
+    {
+      ofs.open("database.txt", std::ofstream::out | std::ofstream::trunc);
+      ofs << "USERS:";
+      ofs.close();
+      cout << "User database was not present, new database created!" << endl;
+    }
+    else
+    {
+      //Fills global vector with pre-existing data, to handle persistance of data
+      string line;
+      while(!ifs.eof())
       {
-        if((line.substr(0, 10) == "Following:") && (line.substr(line.length() - 5) == "@****"))
+        getline(ifs, line);
+        if(line.length() >= 15)
         {
-          pair<vector<string>, vector<string>> newUser;
-          istringstream iss(line);
-          string name;
-          vector<string> following;
-          vector<string> followers;
-
-          iss >> name;
-          name.clear();
-          while(!iss.eof())
+          if((line.substr(0, 10) == "Following:") && (line.substr(line.length() - 5) == "@****"))
           {
+            pair<vector<string>, vector<string>> newUser;
+            istringstream iss(line);
+            string name;
+            vector<string> following;
+            vector<string> followers;
+
             iss >> name;
-            if(name != "****" && name != "@****")
-            {
-              following.push_back(name);
-            }
             name.clear();
+            while(!iss.eof())
+            {
+              iss >> name;
+              if(name != "****" && name != "@****")
+              {
+                following.push_back(name);
+              }
+              name.clear();
+            }
+
+            newUser.first = following;
+            newUser.second = followers;
+            users.push_back(newUser);
           }
-
-          newUser.first = following;
-          newUser.second = followers;
-          users.push_back(newUser);
-        }
-        else if((line.substr(0, 10) == "Followers:") && (line.substr(line.length() - 5) == "@****"))
-        {
-          istringstream iss(line);
-          string name;
-
-          iss >> name;
-          name.clear();
-          while(!iss.eof())
+          else if((line.substr(0, 10) == "Followers:") && (line.substr(line.length() - 5) == "@****"))
           {
+            istringstream iss(line);
+            string name;
+
             iss >> name;
-            if(name != "****" && name != "@****")
-            {
-              users.back().second.push_back(name);
-            }
             name.clear();
+            while(!iss.eof())
+            {
+              iss >> name;
+              if(name != "****" && name != "@****")
+              {
+                users.back().second.push_back(name);
+              }
+              name.clear();
+            }
           }
         }
       }
+
+      ifs.close();
     }
 
-    ifs.close();
-  }
-
-  ifs.open("timeline.txt");
-  if(!ifs.is_open())
-  {
-    ofs.open("timeline.txt", std::ofstream::out | std::ofstream::trunc);
-    ofs.close();
-    cout << "Timeline Database was not present, new database created!" << endl;
-  }
-  else
-  {
-    string line;
-
-    while(!ifs.eof())
+    cout << "Before timeline!" << endl;
+    ifs.open("timeline.txt");
+    if(!ifs.is_open())
     {
-      getline(ifs, line);
-      if(line.length() >= 4)
+      ofs.open("timeline.txt", std::ofstream::out | std::ofstream::trunc);
+      ofs.close();
+      cout << "Timeline Database was not present, new database created!" << endl;
+    }
+    else
+    {
+      string line;
+
+      while(!ifs.eof())
       {
-        if(line.substr(0, 2) == "<*" && line.substr(line.length() -2, 2) == "*>")
+        getline(ifs, line);
+        if(line.length() >= 4)
         {
-          vector<string> userVec;
-          userVec.push_back(line.substr(2, line.length() - 4));
-          timelines.push_back(userVec);
+          if(line.substr(0, 2) == "<*" && line.substr(line.length() -2, 2) == "*>")
+          {
+            string name = line.substr(2, line.length() - 4);
+            vector<string> userVec;
+            userVec.push_back(name);
+            timelines.push_back(userVec);
+
+            pair<string, ServerReaderWriter<Message, Message>*> userSRW;
+            userSRW.first = name;
+            timelineFDs.push_back(userSRW);
+          }
+          else
+          {
+            timelines.back().push_back(line);
+          }
         }
-        else
-        {
-          timelines.back().push_back(line);
-        }
+
+        line.clear();
       }
-
-      line.clear();
+      ifs.close();
     }
+
   }
 
-  for(int i = 0; i < timelines.size(); i++)
-  {
-    cout << "TL User: " << timelines.at(i).at(0) << endl;
-    for(int j = 1; j < timelines.at(i).size(); j++)
-    {
-      cout << "TL: " << timelines.at(i).at(j) << endl;
-    }
-  }
+  cout << "After timeline!" << endl;
 
   RunServer(port);
   return 0;

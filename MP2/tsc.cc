@@ -157,12 +157,12 @@ IReply Client::processCommand(std::string& input)
             {
                 if(rep.all_users(0) == "failed-follows")
                 {
-                    ire.comm_status = FAILURE_INVALID_USERNAME;
+                    ire.comm_status = FAILURE_ALREADY_EXISTS;
                     return ire;
                 }
                 else if(rep.all_users(0) == "failed-DNE")
                 {
-                    ire.comm_status = FAILURE_NOT_EXISTS;
+                    ire.comm_status = FAILURE_INVALID_USERNAME;
                     return ire;
                 }
             }
@@ -206,7 +206,7 @@ IReply Client::processCommand(std::string& input)
                 }
                 else if(rep.all_users(0) == "failed-DNE")
                 {
-                    ire.comm_status = FAILURE_NOT_EXISTS;
+                    ire.comm_status = FAILURE_INVALID_USERNAME;
                     return ire;
                 }
                 else if(rep.all_users(0) == "failed-self")
@@ -329,9 +329,8 @@ void timelineThread(std::shared_ptr<ClientReaderWriter<Message, Message>> crw)
 {
     while(true)
     {
-        cout << "Am i blocking?" << endl;
         Message post;
-        if(crw->Read(&post))
+        while(crw->Read(&post))
         {
             cout << post.username() << post.msg() << endl;
         }
