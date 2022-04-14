@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package coordinator;
+
+import "google/protobuf/timestamp.proto";
+
+// The messenger service definition.
+service CoordService{
+  rpc Connect (Request) returns (Reply) {}
+}
+
+message Request {
+  string type = 1;
+  int32 id = 2;
+  repeated string arguments = 3;
+}
+
+message Reply {
+  string ipAddress = 1;
+  int32 port = 2;
+}

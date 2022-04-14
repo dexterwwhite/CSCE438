@@ -8,6 +8,9 @@
 #include "client.h"
 
 #include "sns.grpc.pb.h"
+#include "coord.grpc.pb.h"
+
+using std::string;
 using grpc::Channel;
 using grpc::ClientContext;
 using grpc::ClientReader;
@@ -19,6 +22,8 @@ using csce438::ListReply;
 using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
+
+using coordinator::CoordService;
 
 Message MakeMessage(const std::string& username, const std::string& msg) {
     Message m;
@@ -36,8 +41,9 @@ class Client : public IClient
     public:
         Client(const std::string& hname,
                const std::string& uname,
-               const std::string& p)
-            :hostname(hname), username(uname), port(p)
+               const std::string& p,
+               const int idNum)
+            :hostname(hname), username(uname), port(p), id(idNum)
             {}
     protected:
         virtual int connectTo();
@@ -47,10 +53,13 @@ class Client : public IClient
         std::string hostname;
         std::string username;
         std::string port;
+        int id;
         // You can have an instance of the client stub
         // as a member variable.
         std::unique_ptr<SNSService::Stub> stub_;
+        std::unique_ptr<CoordService::Stub> cstub;
 
+        IReply Connect();
         IReply Login();
         IReply List();
         IReply Follow(const std::string& username2);
@@ -61,25 +70,29 @@ class Client : public IClient
 };
 
 int main(int argc, char** argv) {
-
-    std::string hostname = "localhost";
-    std::string username = "default";
-    std::string port = "3010";
+    string username = "unused";
+    int id = 1;
+    string coordIP = "localhost";
+    string coordPort = "1234";
     int opt = 0;
-    while ((opt = getopt(argc, argv, "h:u:p:")) != -1){
+    while ((opt = getopt(argc, argv, "c:p:i:")) != -1){
         switch(opt) {
-            case 'h':
-                hostname = optarg;break;
-            case 'u':
-                username = optarg;break;
+            case 'c':
+                coordIP = optarg;
+                break;
             case 'p':
-                port = optarg;break;
+                coordPort = optarg;
+                break;
+            case 'i':
+                id = atoi(optarg);
+                break;
             default:
                 std::cerr << "Invalid Command Line Argument\n";
         }
     }
 
-    Client myc(hostname, username, port);
+
+    Client myc(coordIP, username, coordPort, id);
     // You MUST invoke "run_client" function to start business logic
     myc.run_client();
 
@@ -97,12 +110,20 @@ int Client::connectTo()
     // a member variable in your own Client class.
     // Please refer to gRpc tutorial how to create a stub.
 	// ------------------------------------------------------------
+
     std::string login_info = hostname + ":" + port;
+    cstub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
+               grpc::CreateChannel(
+                    login_info, grpc::InsecureChannelCredentials())));
+    IReply ire = Connect();
+    return 0;
+
+    login_info = hostname + ":" + port;
     stub_ = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(
                grpc::CreateChannel(
                     login_info, grpc::InsecureChannelCredentials())));
 
-    IReply ire = Login();
+    ire = Login();
     if(!ire.grpc_status.ok()) {
         return -1;
     }
@@ -305,6 +326,18 @@ IReply Client::Login() {
     } else {
         ire.comm_status = SUCCESS;
     }
+    return ire;
+}
+
+IReply Client::Connect() {
+    coordinator::Request request;
+    request.set_id(id);
+    coordinator::Reply reply;
+    ClientContext context;
+
+    Status status = cstub->Connect(&context, request, &reply);
+
+    IReply ire;
     return ire;
 }
 

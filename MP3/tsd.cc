@@ -97,7 +97,7 @@ class SNSServiceImpl final : public SNSService::Service {
       list_reply->add_all_users(c.username);
     }
     std::vector<Client*>::const_iterator it;
-    for(it = user.client_followers.begin(); it!=user.client_followers.end(); it++){
+    for(it = user.client_followers.begin(); it != user.client_followers.end(); it++){
       list_reply->add_followers((*it)->username);
     }
     return Status::OK;
