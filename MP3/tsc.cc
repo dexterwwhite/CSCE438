@@ -10,6 +10,8 @@
 #include "sns.grpc.pb.h"
 #include "coord.grpc.pb.h"
 
+using std::cout;
+using std::endl;
 using std::string;
 using grpc::Channel;
 using grpc::ClientContext;
@@ -331,11 +333,15 @@ IReply Client::Login() {
 
 IReply Client::Connect() {
     coordinator::Request request;
+    request.set_type("client");
     request.set_id(id);
     coordinator::Reply reply;
     ClientContext context;
 
     Status status = cstub->Connect(&context, request, &reply);
+
+    cout << "IP: " << reply.ipaddress() << endl;;
+    cout << "PORT: " << reply.port() << endl;
 
     IReply ire;
     return ire;

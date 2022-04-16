@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <mutex>
 #include <stdlib.h>
 #include <unistd.h>
 #include <google/protobuf/util/time_util.h>
@@ -16,6 +17,8 @@ using std::cout;
 using std::endl;
 using std::vector;
 using std::string;
+using std::mutex;
+using std::unique_lock;
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
 using grpc::Server;
@@ -53,12 +56,49 @@ class Cluster {
 };
 
 vector<Cluster> serverClusters;
+mutex mtx;
 
 class CoordServiceImpl final : public CoordService::Service {
   
     Status Connect(ServerContext* context, const Request* request, Reply* reply) override {
-        int id = request->id();
-        cout << "ID: " << id << endl;
+
+        if(request->type() == "client")
+        {
+            int id = request->id();
+
+            //ID - 1 means Client #1 will be placed into server cluster 1 (index 0 of the vector of clusters)
+            int cluster = (id - 1) % 3;
+            {
+                unique_lock<mutex> connectLock(mtx);
+                serverClusters.at(cluster).addClient(id);
+                reply->set_ipaddress(serverClusters.at(cluster).getIP());
+                reply->set_port(serverClusters.at(cluster).getMasterPort());
+            }
+            cout << "ID: " << id << endl;
+            cout << "Client will be placed in server cluster " << cluster + 1 << endl;
+        }
+        else if(request->type() == "server")
+        {
+            int id = request->id();
+            int cluster = id - 1;
+            bool isMaster = false;
+            if(request->arguments(0) == "master")
+                isMaster = true;
+
+            int port = stoi(request->arguments(1));
+            {
+                unique_lock<mutex> connectLock(mtx);
+                if(isMaster)
+                {
+                    serverClusters.at(cluster).setMasterPort(port);
+                }
+                else
+                    serverClusters.at(cluster).setSlavePort(port);
+            }
+            cout << "Server placed in cluster " << id << endl;
+            cout << "Server is of type " << request->arguments(0) << endl;
+            cout << "Server port is " << port << endl;
+        }
         return Status::OK;
     }
 };
@@ -90,8 +130,14 @@ int main(int argc, char** argv) {
     }
 
     Cluster c1;
+    c1.setIP("0.0.0.0");
+    c1.setMasterPort(1234);
     Cluster c2;
+    c2.setIP("0.0.0.0");
+    c2.setMasterPort(1234);
     Cluster c3;
+    c3.setIP("0.0.0.0");
+    c3.setMasterPort(1234);
     serverClusters.push_back(c1);
     serverClusters.push_back(c2);
     serverClusters.push_back(c3);

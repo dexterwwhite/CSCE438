@@ -46,7 +46,11 @@
 #include <grpc++/grpc++.h>
 
 #include "sns.grpc.pb.h"
+#include "coord.grpc.pb.h"
 
+using std::cout;
+using std::endl;
+using std::string;
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
 using grpc::Server;
@@ -61,6 +65,8 @@ using csce438::ListReply;
 using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
+using coordinator::CoordService;
+using grpc::ClientContext;
 
 struct Client {
   std::string username;
@@ -76,6 +82,10 @@ struct Client {
 
 //Vector that stores every client that has been created
 std::vector<Client> client_db;
+
+std::unique_ptr<CoordService::Stub> cstub;
+
+bool master;
 
 //Helper function used to find a Client object given its username
 int find_user(std::string username){
@@ -232,6 +242,25 @@ class SNSServiceImpl final : public SNSService::Service {
 
 };
 
+void Coordinate(string coordAddress, string coordPort, string port, int id) {
+	string login_info = coordAddress + ":" + coordPort;
+	cstub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
+				grpc::CreateChannel(
+					login_info, grpc::InsecureChannelCredentials())));
+	coordinator::Request request;
+    request.set_type("server");
+	request.set_id(id);
+	if(master)
+		request.add_arguments("master");
+	else
+		request.add_arguments("slave");
+    request.add_arguments(port);
+    coordinator::Reply reply;
+    ClientContext context;
+
+    Status status = cstub->Connect(&context, request, &reply);
+}
+
 void RunServer(std::string port_no) {
   std::string server_address = "0.0.0.0:"+port_no;
   SNSServiceImpl service;
@@ -246,18 +275,48 @@ void RunServer(std::string port_no) {
 }
 
 int main(int argc, char** argv) {
-  
-  std::string port = "3010";
-  int opt = 0;
-  while ((opt = getopt(argc, argv, "p:")) != -1){
-    switch(opt) {
-      case 'p':
-          port = optarg;break;
-      default:
-	  std::cerr << "Invalid Command Line Argument\n";
-    }
-  }
-  RunServer(port);
+	string port = "3010";
+	string coordAddress = "127.0.0.1";
+	string coordPort = "1234";
+	int id = 1;
+	string masterOrNot;
+	
+	int opt = 0;
+	while ((opt = getopt(argc, argv, "h:c:p:i:t:")) != -1){
+		switch(opt) {
+		case 'p':
+			port = optarg;
+			break;
+		case 'h':
+			coordAddress = optarg;
+			break;
+		case 'c':
+			coordPort = optarg;
+			break;
+		case 'i':
+			id = atoi(optarg);
+			break;
+		case 't':
+			masterOrNot = optarg;
+			if(masterOrNot == "master")
+			{
+				cout << "Optarg: " << optarg << endl;
+				cout << "Hey" << endl;
+				master = true;
+			}
+			else
+			{
+				cout << "Optarg: " << optarg << endl;
+				cout << "Nope" << endl;
+				master = false;
+			}
+			break;
+		default:
+		std::cerr << "Invalid Command Line Argument\n";
+		}
+	}
+	Coordinate(coordAddress, coordPort, port, id);
+	RunServer(port);
 
-  return 0;
+	return 0;
 }
