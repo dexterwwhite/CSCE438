@@ -87,6 +87,7 @@ int main(int argc, char** argv) {
                 break;
             case 'i':
                 id = atoi(optarg);
+                username = optarg;
                 break;
             default:
                 std::cerr << "Invalid Command Line Argument\n";
@@ -118,7 +119,6 @@ int Client::connectTo()
                grpc::CreateChannel(
                     login_info, grpc::InsecureChannelCredentials())));
     IReply ire = Connect();
-    return 0;
 
     login_info = hostname + ":" + port;
     stub_ = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(
@@ -340,10 +340,12 @@ IReply Client::Connect() {
 
     Status status = cstub->Connect(&context, request, &reply);
 
-    cout << "IP: " << reply.ipaddress() << endl;;
-    cout << "PORT: " << reply.port() << endl;
-
     IReply ire;
+    ire.grpc_status = status;
+    ire.comm_status = SUCCESS;
+
+    hostname = reply.ipaddress();
+    port = std::to_string(reply.port());
     return ire;
 }
 

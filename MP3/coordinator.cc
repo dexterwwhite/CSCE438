@@ -85,11 +85,12 @@ class CoordServiceImpl final : public CoordService::Service {
             if(request->arguments(0) == "master")
                 isMaster = true;
 
-            int port = stoi(request->arguments(1));
+            int port = stoi(request->arguments(2));
             {
                 unique_lock<mutex> connectLock(mtx);
                 if(isMaster)
                 {
+                    serverClusters.at(cluster).setIP(request->arguments(1));
                     serverClusters.at(cluster).setMasterPort(port);
                 }
                 else

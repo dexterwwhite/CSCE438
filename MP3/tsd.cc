@@ -42,6 +42,12 @@
 #include <string>
 #include <stdlib.h>
 #include <unistd.h>
+
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <ifaddrs.h>
+#include <stdio.h>
+
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
 
@@ -242,7 +248,7 @@ class SNSServiceImpl final : public SNSService::Service {
 
 };
 
-void Coordinate(string coordAddress, string coordPort, string port, int id) {
+void Coordinate(string coordAddress, string coordPort, string address, string port, int id) {
 	string login_info = coordAddress + ":" + coordPort;
 	cstub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
 				grpc::CreateChannel(
@@ -254,6 +260,7 @@ void Coordinate(string coordAddress, string coordPort, string port, int id) {
 		request.add_arguments("master");
 	else
 		request.add_arguments("slave");
+	request.add_arguments(address);
     request.add_arguments(port);
     coordinator::Reply reply;
     ClientContext context;
@@ -315,7 +322,30 @@ int main(int argc, char** argv) {
 		std::cerr << "Invalid Command Line Argument\n";
 		}
 	}
-	Coordinate(coordAddress, coordPort, port, id);
+
+	//How server determines its IP address
+	string address = "";
+	struct ifaddrs *ifap, *ifa;
+    struct sockaddr_in *sa;
+    char *addr;
+	int count = 1;
+
+    getifaddrs (&ifap);
+    for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr && ifa->ifa_addr->sa_family==AF_INET) {
+            sa = (struct sockaddr_in *) ifa->ifa_addr;
+            addr = inet_ntoa(sa->sin_addr);
+			if(count == 0)
+			{
+				address = addr;
+				break;
+			}
+			count--;
+        }
+    }
+    freeifaddrs(ifap);
+
+	Coordinate(coordAddress, coordPort, address, port, id);
 	RunServer(port);
 
 	return 0;
