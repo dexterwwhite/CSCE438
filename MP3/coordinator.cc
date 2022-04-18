@@ -1,7 +1,7 @@
 /**
 
     NEED TO DO:
-    Implement Heartbeat()
+    Implement Heartbeat() -- DONE?!
     Implement follow synchronizer Connect()
 
 */
@@ -171,6 +171,20 @@ class CoordServiceImpl final : public CoordService::Service {
             cout << "Server is of type " << request->arguments(0) << endl;
             cout << "Server port is " << port << endl;
         }
+        else if(request->type() == "master")
+        {
+            int id = request->id();
+            int cluster = id - 1;
+            while(serverClusters.at(cluster).getSlave() == nullptr)
+            {
+                sleep(1);
+            }
+            {
+                unique_lock<mutex> connectLock(mtx);
+                reply->set_ipaddress(serverClusters.at(cluster).getIP());
+                reply->set_port(serverClusters.at(cluster).getSlave()->getPort());
+            }
+        }
         return Status::OK;
     }
 
@@ -185,7 +199,6 @@ class CoordServiceImpl final : public CoordService::Service {
         {
             unique_lock<mutex> threadLock(mtx);
             isMaster = true;
-            cout << "Porty: " << serverClusters.at(clusterID).getMaster()->getPort() << endl;
             thread listenerThread(heartBeatThread, clusterID, serverClusters.at(clusterID).getMaster());
             listenerThread.detach();
         }

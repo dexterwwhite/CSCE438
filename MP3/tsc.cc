@@ -370,7 +370,7 @@ void Client::Timeline(const std::string& username) {
             m = MakeMessage(username, input);
             stream->Write(m);
             }
-            stream->WritesDone();
+            //stream->WritesDone();
             });
 
     std::thread reader([username, stream]() {

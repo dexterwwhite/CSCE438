@@ -34,8 +34,8 @@
  /**
 
 	NEED TO DO:
-	Implement Heartbeat()
-	Implement Master->Slave Interaction
+	Implement Heartbeat() -- DONE?!
+	CURRENT:::: Implement Master->Slave Interaction
 	Implement Follow Synchronizer Interaction
  */
 
@@ -103,6 +103,8 @@ std::vector<Client> client_db;
 
 std::unique_ptr<CoordService::Stub> cstub;
 
+std::unique_ptr<SNSService::Stub> slaveStub = nullptr;
+
 bool master;
 
 //Helper function used to find a Client object given its username
@@ -147,6 +149,12 @@ class SNSServiceImpl final : public SNSService::Service {
       user1->client_following.push_back(user2);
       user2->client_followers.push_back(user1);
       reply->set_msg("Follow Successful");
+	  if(master && slaveStub != nullptr)
+	  {
+		  ClientContext cc;
+		  Reply slaveReply;
+		  slaveStub->Follow(&cc, *request, &slaveReply);
+	  }
     }
     return Status::OK; 
   }
@@ -171,92 +179,102 @@ class SNSServiceImpl final : public SNSService::Service {
     return Status::OK;
   }
   
-  Status Login(ServerContext* context, const Request* request, Reply* reply) override {
-    Client c;
-    std::string username = request->username();
-    int user_index = find_user(username);
-    if(user_index < 0){
-      c.username = username;
-      client_db.push_back(c);
-      reply->set_msg("Login Successful!");
-    }
-    else{ 
-      Client *user = &client_db[user_index];
-      if(user->connected)
-        reply->set_msg("Invalid Username");
-      else{
-        std::string msg = "Welcome Back " + user->username;
-	reply->set_msg(msg);
-        user->connected = true;
-      }
-    }
-    return Status::OK;
-  }
+	Status Login(ServerContext* context, const Request* request, Reply* reply) override {
+		if(master && slaveStub != nullptr)
+		{
+			ClientContext cc;
+			Reply slaveReply;
+			slaveStub->Login(&cc, *request, &slaveReply);
+		}
+		Client c;
+		std::string username = request->username();
+		int user_index = find_user(username);
+		if(user_index < 0)
+		{
+			c.username = username;
+			client_db.push_back(c);
+			reply->set_msg("Login Successful!");
+		}
+		else
+		{ 
+			Client *user = &client_db[user_index];
+			if(user->connected)
+				reply->set_msg("Invalid Username");
+			else
+			{
+				std::string msg = "Welcome Back " + user->username;
+				reply->set_msg(msg);
+				user->connected = true;
+			}
+		}
+		return Status::OK;
+	}
 
-  Status Timeline(ServerContext* context, 
-		ServerReaderWriter<Message, Message>* stream) override {
-    Message message;
-    Client *c;
-    while(stream->Read(&message)) {
-      std::string username = message.username();
-      int user_index = find_user(username);
-      c = &client_db[user_index];
- 
-      //Write the current message to "username.txt"
-      std::string filename = username+".txt";
-      std::ofstream user_file(filename,std::ios::app|std::ios::out|std::ios::in);
-      google::protobuf::Timestamp temptime = message.timestamp();
-      std::string time = google::protobuf::util::TimeUtil::ToString(temptime);
-      std::string fileinput = time+" :: "+message.username()+":"+message.msg()+"\n";
-      //"Set Stream" is the default message from the client to initialize the stream
-      if(message.msg() != "Set Stream")
-        user_file << fileinput;
-      //If message = "Set Stream", print the first 20 chats from the people you follow
-      else{
-        if(c->stream==0)
-      	  c->stream = stream;
-        std::string line;
-        std::vector<std::string> newest_twenty;
-        std::ifstream in(username+"following.txt");
-        int count = 0;
-        //Read the last up-to-20 lines (newest 20 messages) from userfollowing.txt
-        while(getline(in, line)){
-          if(c->following_file_size > 20){
-	    if(count < c->following_file_size-20){
-              count++;
-	      continue;
-            }
-          }
-          newest_twenty.push_back(line);
-        }
-        Message new_msg; 
- 	//Send the newest messages to the client to be displayed
-	for(int i = 0; i<newest_twenty.size(); i++){
-	  new_msg.set_msg(newest_twenty[i]);
-          stream->Write(new_msg);
-        }    
-        continue;
-      }
-      //Send the message to each follower's stream
-      std::vector<Client*>::const_iterator it;
-      for(it = c->client_followers.begin(); it!=c->client_followers.end(); it++){
-        Client *temp_client = *it;
-      	if(temp_client->stream!=0 && temp_client->connected)
-	  temp_client->stream->Write(message);
-        //For each of the current user's followers, put the message in their following.txt file
-        std::string temp_username = temp_client->username;
-        std::string temp_file = temp_username + "following.txt";
-	std::ofstream following_file(temp_file,std::ios::app|std::ios::out|std::ios::in);
-	following_file << fileinput;
-        temp_client->following_file_size++;
-	std::ofstream user_file(temp_username + ".txt",std::ios::app|std::ios::out|std::ios::in);
-        user_file << fileinput;
-      }
-    }
-    //If the client disconnected from Chat Mode, set connected to false
-    c->connected = false;
-    return Status::OK;
-  }
+	Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
+		Message message;
+		Client *c;
+		while(stream->Read(&message)) {
+		std::string username = message.username();
+		int user_index = find_user(username);
+		c = &client_db[user_index];
+	
+		//Write the current message to "username.txt"
+		std::string filename = username+".txt";
+		std::ofstream user_file(filename,std::ios::app|std::ios::out|std::ios::in);
+		google::protobuf::Timestamp temptime = message.timestamp();
+		std::string time = google::protobuf::util::TimeUtil::ToString(temptime);
+		std::string fileinput = time+" :: "+message.username()+":"+message.msg()+"\n";
+		//"Set Stream" is the default message from the client to initialize the stream
+		if(message.msg() != "Set Stream")
+			user_file << fileinput;
+		//If message = "Set Stream", print the first 20 chats from the people you follow
+		else{
+			if(c->stream==0)
+				c->stream = stream;
+			std::string line;
+			std::vector<std::string> newest_twenty;
+			std::ifstream in(username+"following.txt");
+			int count = 0;
+			//Read the last up-to-20 lines (newest 20 messages) from userfollowing.txt
+			while(getline(in, line)){
+			if(c->following_file_size > 20)
+			{
+				if(count < c->following_file_size-20)
+				{
+					count++;
+					continue;
+				}
+			}
+			newest_twenty.push_back(line);
+			}
+			Message new_msg; 
+		//Send the newest messages to the client to be displayed
+		for(int i = 0; i<newest_twenty.size(); i++){
+		new_msg.set_msg(newest_twenty[i]);
+			stream->Write(new_msg);
+			}    
+			continue;
+		}
+		//Send the message to each follower's stream
+		std::vector<Client*>::const_iterator it;
+		for(it = c->client_followers.begin(); it!=c->client_followers.end(); it++){
+			Client *temp_client = *it;
+			if(temp_client->stream!=0 && temp_client->connected)
+		temp_client->stream->Write(message);
+			//For each of the current user's followers, put the message in their following.txt file
+			std::string temp_username = temp_client->username;
+			std::string temp_file = temp_username + "following.txt";
+		std::ofstream following_file(temp_file,std::ios::app|std::ios::out|std::ios::in);
+		following_file << fileinput;
+			temp_client->following_file_size++;
+		std::ofstream user_file(temp_username + ".txt",std::ios::app|std::ios::out|std::ios::in);
+			user_file << fileinput;
+		}
+		}
+		//If the client disconnected from Chat Mode, set connected to false
+		c->connected = false;
+		return Status::OK;
+	}
 
 };
 
@@ -297,6 +315,25 @@ void heartbeat(int id) {
 		sleep(10);
 		stream->Write(pulse);
 	}
+}
+
+void locateSlave(int id) {
+	ClientContext context;
+	coordinator::Request request;
+	request.set_type("master");
+	request.set_id(id);
+	coordinator::Reply reply;
+
+	Status status = cstub->Connect(&context, request, &reply);
+	if(!status.ok())
+	{
+		cout << "Could not connect to coordinator. Terminating" << endl;
+		return;
+	}
+	string slaveInfo = reply.ipaddress() + ":" + std::to_string(reply.port());
+	slaveStub = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(
+				grpc::CreateChannel(
+					slaveInfo, grpc::InsecureChannelCredentials())));
 }
 
 void Coordinate(string coordAddress, string coordPort, string address, string port, int id) {
@@ -402,6 +439,8 @@ int main(int argc, char** argv) {
     freeifaddrs(ifap);
 
 	Coordinate(coordAddress, coordPort, address, port, id);
+	if(master)
+		locateSlave(id);
 	thread heartbeatThread(heartbeat, id);
 	heartbeatThread.detach();
 	RunServer(port);
