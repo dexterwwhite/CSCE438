@@ -119,16 +119,21 @@ int Client::connectTo()
                grpc::CreateChannel(
                     login_info, grpc::InsecureChannelCredentials())));
     IReply ire = Connect();
+    if(!ire.grpc_status.ok())
+    {
+        return -1;
+    }
 
     login_info = hostname + ":" + port;
     stub_ = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(
                grpc::CreateChannel(
                     login_info, grpc::InsecureChannelCredentials())));
 
-    ire = Login();
-    if(!ire.grpc_status.ok()) {
+    IReply ire2 = Login();
+    if(!ire2.grpc_status.ok()) {
         return -1;
     }
+
     return 1;
 }
 

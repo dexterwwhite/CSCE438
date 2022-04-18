@@ -31,6 +31,14 @@
  *
  */
 
+ /**
+
+	NEED TO DO:
+	Implement Heartbeat()
+	Implement Master->Slave Interaction
+	Implement Follow Synchronizer Interaction
+ */
+
 #include <ctime>
 
 #include <google/protobuf/timestamp.pb.h>
@@ -40,6 +48,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -57,6 +66,7 @@
 using std::cout;
 using std::endl;
 using std::string;
+using std::thread;
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
 using grpc::Server;
@@ -72,7 +82,9 @@ using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
 using coordinator::CoordService;
+using coordinator::Pulse;
 using grpc::ClientContext;
+using grpc::ClientReaderWriter;
 
 struct Client {
   std::string username;
@@ -248,6 +260,45 @@ class SNSServiceImpl final : public SNSService::Service {
 
 };
 
+void heartbeatListen(std::shared_ptr<ClientReaderWriter<Pulse, Pulse>> stream) {
+	Pulse pulse;
+	while(stream->Read(&pulse))
+	{
+		if(pulse.arguments_size() > 0)
+		{
+			if(pulse.arguments(0) == "swap")
+			{
+				cout << "Switching to master!" << endl;
+				master = true;
+			}
+		}
+	}
+}
+
+void heartbeat(int id) {
+	ClientContext context;
+
+    std::shared_ptr<ClientReaderWriter<Pulse, Pulse>> stream(cstub->Heartbeat(&context));
+	Pulse pulse;
+	pulse.set_id(id);
+	if(master)
+	{
+		pulse.set_type("master");
+	}
+	else
+	{
+		pulse.set_type("slave");
+	}
+	stream->Write(pulse);
+	thread listener(heartbeatListen, stream);
+	listener.detach();
+	while(true)
+	{
+		sleep(10);
+		stream->Write(pulse);
+	}
+}
+
 void Coordinate(string coordAddress, string coordPort, string address, string port, int id) {
 	string login_info = coordAddress + ":" + coordPort;
 	cstub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
@@ -266,6 +317,11 @@ void Coordinate(string coordAddress, string coordPort, string address, string po
     ClientContext context;
 
     Status status = cstub->Connect(&context, request, &reply);
+	if(!status.ok())
+	{
+		cout << "Could not connect to coordinator. Terminating" << endl;
+		return;
+	}
 }
 
 void RunServer(std::string port_no) {
@@ -346,6 +402,8 @@ int main(int argc, char** argv) {
     freeifaddrs(ifap);
 
 	Coordinate(coordAddress, coordPort, address, port, id);
+	thread heartbeatThread(heartbeat, id);
+	heartbeatThread.detach();
 	RunServer(port);
 
 	return 0;

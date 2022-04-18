@@ -7,6 +7,7 @@ import "google/protobuf/timestamp.proto";
 // The messenger service definition.
 service CoordService{
   rpc Connect (Request) returns (Reply) {}
+  rpc Heartbeat (stream Pulse) returns (stream Pulse) {} 
 }
 
 message Request {
@@ -18,4 +19,10 @@ message Request {
 message Reply {
   string ipAddress = 1;
   int32 port = 2;
+}
+
+message Pulse {
+  string type = 1;
+  int32 id = 2;
+  repeated string arguments = 3;
 }

@@ -1,3 +1,11 @@
+/**
+
+    NEED TO DO:
+    Implement Heartbeat()
+    Implement follow synchronizer Connect()
+
+*/
+
 #include <ctime>
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
@@ -6,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <thread>
 #include <stdlib.h>
 #include <unistd.h>
 #include <google/protobuf/util/time_util.h>
@@ -19,9 +28,9 @@ using std::vector;
 using std::string;
 using std::mutex;
 using std::unique_lock;
+using std::thread;
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
-using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::ServerReader;
@@ -31,32 +40,90 @@ using grpc::Status;
 using coordinator::CoordService;
 using coordinator::Request;
 using coordinator::Reply;
+using coordinator::Pulse;
+
+class Server {
+    private:
+        bool isMaster;
+        int port;
+        bool checkedIn;
+        bool warning;
+        bool active;
+
+    public:
+        Server(bool master, int port_no) : isMaster(master), port(port_no)
+        {
+            checkedIn = true;
+            warning = false;
+            active = true;
+        }
+        int getPort() { return port; }
+        void setMasterStatus() { isMaster = true; }
+        void notMaster() { isMaster = false; }
+        bool master() { return isMaster; }
+        void checkIn() { checkedIn = true; }
+        void checkOut() { checkedIn = false; }
+        bool check() { return checkedIn; }
+        void setWarning() { warning = true; }
+        void rmWarning() { warning = false; }
+        bool warningStatus() { return warning; }
+        void activate() { active = true; }
+        void deactivate() { active = false; }
+        bool isActive() { return active; }
+};
 
 class Cluster {
     private:
         int clusterNum;
         string ipAddress;
-        int masterPort;
-        int slavePort;
         int synchPort;
         vector<int> clients;
+        bool swap;
+        Server* master;
+        Server* slave;
+
     public:
-        Cluster() {}
-        void setClusterNum(int num) { clusterNum = num; }
+        Cluster(int num) : clusterNum(num)
+        {
+            swap = false;
+            master = nullptr;
+            slave = nullptr;
+        }
+        //Routing Functions
         int getClusterNum() { return clusterNum; }
         void setIP(string ip) { ipAddress = ip; }
         string getIP() { return ipAddress; }
-        void setMasterPort(int port) { masterPort = port; }
-        int getMasterPort() { return masterPort; }
-        void setSlavePort(int port) { slavePort = port; }
-        int getSlavePort() { return slavePort; }
+        void setMaster(Server* mas) {
+            master = mas;
+        }
+        Server* getMaster() { return master; }
+        void setSlave(Server* sla) {
+            slave = sla;
+        }
+        Server* getSlave() { return slave; }
         void setSynchPort(int port) { synchPort = port; }
         int getSynchPort() { return synchPort; }
         void addClient(int id) { clients.push_back(id); }
+        void promote() {
+            Server* temp = master;
+            master = slave;
+            slave = temp;
+            master->setMasterStatus();
+            slave->notMaster();
+            slave->deactivate();
+            temp = nullptr;
+        }
+
+        //Heartbeat Functions
+        void swapOn() { swap = true; }
+        void swapOff() { swap = false; }
+        bool swapStatus() { return swap; }
 };
 
 vector<Cluster> serverClusters;
 mutex mtx;
+
+void heartBeatThread(int clusterID, Server* server);
 
 class CoordServiceImpl final : public CoordService::Service {
   
@@ -72,7 +139,7 @@ class CoordServiceImpl final : public CoordService::Service {
                 unique_lock<mutex> connectLock(mtx);
                 serverClusters.at(cluster).addClient(id);
                 reply->set_ipaddress(serverClusters.at(cluster).getIP());
-                reply->set_port(serverClusters.at(cluster).getMasterPort());
+                reply->set_port(serverClusters.at(cluster).getMaster()->getPort());
             }
             cout << "ID: " << id << endl;
             cout << "Client will be placed in server cluster " << cluster + 1 << endl;
@@ -90,11 +157,15 @@ class CoordServiceImpl final : public CoordService::Service {
                 unique_lock<mutex> connectLock(mtx);
                 if(isMaster)
                 {
+                    Server* mServer = new Server(true, port);
                     serverClusters.at(cluster).setIP(request->arguments(1));
-                    serverClusters.at(cluster).setMasterPort(port);
+                    serverClusters.at(cluster).setMaster(mServer);
                 }
                 else
-                    serverClusters.at(cluster).setSlavePort(port);
+                {
+                    Server* sServer = new Server(false, port);
+                    serverClusters.at(cluster).setSlave(sServer);
+                }
             }
             cout << "Server placed in cluster " << id << endl;
             cout << "Server is of type " << request->arguments(0) << endl;
@@ -102,7 +173,89 @@ class CoordServiceImpl final : public CoordService::Service {
         }
         return Status::OK;
     }
+
+    Status Heartbeat(ServerContext* context, ServerReaderWriter<Pulse, Pulse>* stream) override {
+        Pulse pulse;
+        int clusterID;
+        bool isMaster = false;
+        stream->Read(&pulse);
+        clusterID = pulse.id() - 1;
+        sleep(2);
+        if(pulse.type() == "master")
+        {
+            unique_lock<mutex> threadLock(mtx);
+            isMaster = true;
+            cout << "Porty: " << serverClusters.at(clusterID).getMaster()->getPort() << endl;
+            thread listenerThread(heartBeatThread, clusterID, serverClusters.at(clusterID).getMaster());
+            listenerThread.detach();
+        }
+        else
+        {
+            unique_lock<mutex> threadLock(mtx);
+            thread listenerThread(heartBeatThread, clusterID, serverClusters.at(clusterID).getSlave());
+            listenerThread.detach();
+        }
+
+        while(stream->Read(&pulse))
+        {
+            if(isMaster)
+            {
+                unique_lock<mutex> beatLock(mtx);
+                serverClusters.at(clusterID).getMaster()->checkIn();
+                serverClusters.at(clusterID).getMaster()->rmWarning();
+            }
+            else
+            {
+                unique_lock<mutex> beatLock(mtx);
+                serverClusters.at(clusterID).getSlave()->checkIn();
+                serverClusters.at(clusterID).getSlave()->rmWarning();
+                if(serverClusters.at(clusterID).swapStatus())
+                {
+                    Pulse swapMsg;
+                    swapMsg.add_arguments("swap");
+                    serverClusters.at(clusterID).promote();
+                    serverClusters.at(clusterID).swapOff();
+                    isMaster = true;
+                    stream->Write(swapMsg);
+                }
+            }
+        }
+    
+        return Status::OK;
+    }
 };
+
+void heartBeatThread(int clusterID, Server* server) {
+    while(true)
+    {
+        {
+            unique_lock<mutex> hbtLock(mtx);
+            if(server->check())
+            {
+                cout << "Server is alive!" << endl;
+                server->checkOut();
+            }
+            else
+            {
+                if(server->warningStatus())
+                {
+                    cout << "Server is determined dead" << endl;
+                    if(server->master())
+                    {
+                        serverClusters.at(clusterID).swapOn();
+                    }
+                    break;
+                }
+                else
+                {
+                    cout << "Server has not responded for 1 heartbeat!" << endl;
+                    server->setWarning();
+                }
+            }
+        }
+        sleep(10);
+    }
+}
 
 void RunServer(std::string port_no) {
   std::string server_address = "0.0.0.0:"+port_no;
@@ -111,7 +264,7 @@ void RunServer(std::string port_no) {
   ServerBuilder builder;
   builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
   builder.RegisterService(&service);
-  std::unique_ptr<Server> server(builder.BuildAndStart());
+  std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
   std::cout << "Coordinator listening on " << server_address << std::endl;
 
   server->Wait();
@@ -130,15 +283,12 @@ int main(int argc, char** argv) {
         }
     }
 
-    Cluster c1;
+    Cluster c1(1);
     c1.setIP("0.0.0.0");
-    c1.setMasterPort(1234);
-    Cluster c2;
+    Cluster c2(2);
     c2.setIP("0.0.0.0");
-    c2.setMasterPort(1234);
-    Cluster c3;
+    Cluster c3(3);
     c3.setIP("0.0.0.0");
-    c3.setMasterPort(1234);
     serverClusters.push_back(c1);
     serverClusters.push_back(c2);
     serverClusters.push_back(c3);
