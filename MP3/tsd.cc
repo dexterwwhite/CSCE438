@@ -36,6 +36,8 @@
 	NEED TO DO:
 	Implement Heartbeat() -- DONE?!
 	CURRENT:::: Implement Master->Slave Interaction
+		-for timeline mode, change files to be written to individual server directories
+		-for timeline mode, set up master to create a client reader writer with slave
 	Implement Follow Synchronizer Interaction
  */
 
@@ -51,6 +53,8 @@
 #include <thread>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -85,6 +89,7 @@ using coordinator::CoordService;
 using coordinator::Pulse;
 using grpc::ClientContext;
 using grpc::ClientReaderWriter;
+using grpc::internal::ClientReaderWriterFactory;
 
 struct Client {
   std::string username;
@@ -106,6 +111,7 @@ std::unique_ptr<CoordService::Stub> cstub;
 std::unique_ptr<SNSService::Stub> slaveStub = nullptr;
 
 bool master;
+string fileHeader;
 
 //Helper function used to find a Client object given its username
 int find_user(std::string username){
@@ -133,33 +139,46 @@ class SNSServiceImpl final : public SNSService::Service {
     return Status::OK;
   }
 
-  Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
-    std::string username1 = request->username();
-    std::string username2 = request->arguments(0);
-    int join_index = find_user(username2);
-    if(join_index < 0 || username1 == username2)
-      reply->set_msg("unkown user name");
-    else{
-      Client *user1 = &client_db[find_user(username1)];
-      Client *user2 = &client_db[join_index];
-      if(std::find(user1->client_following.begin(), user1->client_following.end(), user2) != user1->client_following.end()){
-	reply->set_msg("you have already joined");
-        return Status::OK;
-      }
-      user1->client_following.push_back(user2);
-      user2->client_followers.push_back(user1);
-      reply->set_msg("Follow Successful");
-	  if(master && slaveStub != nullptr)
-	  {
-		  ClientContext cc;
-		  Reply slaveReply;
-		  slaveStub->Follow(&cc, *request, &slaveReply);
-	  }
-    }
-    return Status::OK; 
-  }
+	Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
+		if(master && slaveStub != nullptr)
+		{
+			ClientContext cc;
+			Reply slaveReply;
+			slaveStub->Follow(&cc, *request, &slaveReply);
+		}
+		std::string username1 = request->username();
+		std::string username2 = request->arguments(0);
+		int join_index = find_user(username2);
+		if(join_index < 0 || username1 == username2)
+			reply->set_msg("unkown user name");
+		else
+		{
+			Client *user1 = &client_db[find_user(username1)];
+			Client *user2 = &client_db[join_index];
+			if(std::find(user1->client_following.begin(), user1->client_following.end(), user2) != user1->client_following.end())
+			{
+				reply->set_msg("you have already joined");
+				return Status::OK;
+			}
+			user1->client_following.push_back(user2);
+			string fileName1 = fileHeader + "/" + username1 + "/following.txt";
+			std::ofstream ofs(fileName1, std::ofstream::app);
+			ofs << username2 << "\n";
+			ofs.close();
+
+			user2->client_followers.push_back(user1);
+			string fileName2 = fileHeader + "/" + username2 + "/followers.txt";
+			ofs.open(fileName2, std::ofstream::app);
+			ofs << username1 << "\n";
+			ofs.close();
+
+			reply->set_msg("Follow Successful");
+		}
+		return Status::OK; 
+	}
 
   Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
+	return Status::OK;
     std::string username1 = request->username();
     std::string username2 = request->arguments(0);
     int leave_index = find_user(username2);
@@ -194,6 +213,21 @@ class SNSServiceImpl final : public SNSService::Service {
 			c.username = username;
 			client_db.push_back(c);
 			reply->set_msg("Login Successful!");
+
+			//Make their directory
+			string dirName = fileHeader + "/" + username;
+			mkdir(dirName.c_str(), 0777);
+			string firstFile = dirName + "/following.txt";
+			std::ofstream ofs(firstFile);
+			ofs.close();
+			string secondFile = dirName + "/followers.txt";
+			std::ofstream ofs2(secondFile);
+			ofs2.close();
+
+			string thirdFile = dirName + "/timeline.txt";
+			ofs.open(thirdFile);
+			ofs.close();
+
 		}
 		else
 		{ 
@@ -211,65 +245,98 @@ class SNSServiceImpl final : public SNSService::Service {
 	}
 
 	Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
+		cout << "begin" << endl;
+		std::unique_ptr<ClientReaderWriter<Message, Message>> slaveStream = nullptr;
+		ClientContext cc;
+		if(master && slaveStub != nullptr)
+		{
+			cout << "Entered initial if" << endl;
+			//std::shared_ptr<ClientReaderWriter<Message, Message>> slav(slaveStub->Timeline(&context));
+			//Message mensage;
+			//slav->Write(mensage);
+			//slaveStream = slav;
+			slaveStream = slaveStub->Timeline(&cc);
+			//slaveStream = ClientReaderWriterFactory<Message, Message>::Create(slaveStub->channel(),Timeline(), &context);
+		}
+		cout << "After slave stream" << endl;
+
 		Message message;
 		Client *c;
-		while(stream->Read(&message)) {
-		std::string username = message.username();
-		int user_index = find_user(username);
-		c = &client_db[user_index];
-	
-		//Write the current message to "username.txt"
-		std::string filename = username+".txt";
-		std::ofstream user_file(filename,std::ios::app|std::ios::out|std::ios::in);
-		google::protobuf::Timestamp temptime = message.timestamp();
-		std::string time = google::protobuf::util::TimeUtil::ToString(temptime);
-		std::string fileinput = time+" :: "+message.username()+":"+message.msg()+"\n";
-		//"Set Stream" is the default message from the client to initialize the stream
-		if(message.msg() != "Set Stream")
-			user_file << fileinput;
-		//If message = "Set Stream", print the first 20 chats from the people you follow
-		else{
-			if(c->stream==0)
-				c->stream = stream;
-			std::string line;
-			std::vector<std::string> newest_twenty;
-			std::ifstream in(username+"following.txt");
-			int count = 0;
-			//Read the last up-to-20 lines (newest 20 messages) from userfollowing.txt
-			while(getline(in, line)){
-			if(c->following_file_size > 20)
+		while(stream->Read(&message)) 
+		{
+			cout << "Entered while" << endl;
+			if(master && slaveStream != nullptr)
 			{
-				if(count < c->following_file_size-20)
+				cout << "Entered if!" << endl;
+				Message m1 = message;
+				slaveStream->Write(m1);
+			}
+			cout << "After slave stream write" << endl;
+			std::string username = message.username();
+			int user_index = find_user(username);
+			c = &client_db[user_index];
+		
+			//Write the current message to "username.txt"
+			std::string filename = fileHeader + "/" + username + "/timeline.txt";
+			std::ofstream user_file(filename,std::ios::app|std::ios::out|std::ios::in);
+			google::protobuf::Timestamp temptime = message.timestamp();
+			std::string time = google::protobuf::util::TimeUtil::ToString(temptime);
+			std::string fileinput = time+" :: "+message.username()+":"+message.msg();
+			//"Set Stream" is the default message from the client to initialize the stream
+			if(message.msg() != "Set Stream")
+				user_file << fileinput;
+			//If message = "Set Stream", print the first 20 chats from the people you follow
+			else
+			{
+				if(c->stream==0)
+					c->stream = stream;
+				std::string line;
+				std::vector<std::string> newest_twenty;
+				string fname = fileHeader + "/" + username + "/timeline.txt";
+				std::ifstream in(fname);
+				int count = 0;
+				//Read the last up-to-20 lines (newest 20 messages) from userfollowing.txt
+				while(getline(in, line))
 				{
-					count++;
-					continue;
+					if(c->following_file_size > 20)
+					{
+						if(count < c->following_file_size-20)
+						{
+							count++;
+							continue;
+						}
+					}
+					newest_twenty.push_back(line);
 				}
+				Message new_msg; 
+				in.close();
+				//Send the newest messages to the client to be displayed
+				for(int i = 0; i < newest_twenty.size(); i++)
+				{
+					new_msg.set_msg(newest_twenty[i]);
+					stream->Write(new_msg);
+				}    
+				continue;
 			}
-			newest_twenty.push_back(line);
+			//Send the message to each follower's stream
+			std::vector<Client*>::const_iterator it;
+			for(it = c->client_followers.begin(); it!=c->client_followers.end(); it++)
+			{
+				Client *temp_client = *it;
+				if(temp_client->stream!=0 && temp_client->connected)
+					temp_client->stream->Write(message);
+
+				//For each of the current user's followers, put the message in their following.txt file
+				std::string temp_username = temp_client->username;
+				std::string temp_file = temp_username + "following.txt";
+				std::ofstream following_file(temp_file,std::ios::app|std::ios::out|std::ios::in);
+				following_file << fileinput;
+				following_file.close();
+				temp_client->following_file_size++;
+				std::ofstream user_file(fileHeader + "/" + temp_username + "/timeline.txt",std::ios::app|std::ios::out|std::ios::in);
+				user_file << fileinput;
+				user_file.close();
 			}
-			Message new_msg; 
-		//Send the newest messages to the client to be displayed
-		for(int i = 0; i<newest_twenty.size(); i++){
-		new_msg.set_msg(newest_twenty[i]);
-			stream->Write(new_msg);
-			}    
-			continue;
-		}
-		//Send the message to each follower's stream
-		std::vector<Client*>::const_iterator it;
-		for(it = c->client_followers.begin(); it!=c->client_followers.end(); it++){
-			Client *temp_client = *it;
-			if(temp_client->stream!=0 && temp_client->connected)
-		temp_client->stream->Write(message);
-			//For each of the current user's followers, put the message in their following.txt file
-			std::string temp_username = temp_client->username;
-			std::string temp_file = temp_username + "following.txt";
-		std::ofstream following_file(temp_file,std::ios::app|std::ios::out|std::ios::in);
-		following_file << fileinput;
-			temp_client->following_file_size++;
-		std::ofstream user_file(temp_username + ".txt",std::ios::app|std::ios::out|std::ios::in);
-			user_file << fileinput;
-		}
 		}
 		//If the client disconnected from Chat Mode, set connected to false
 		c->connected = false;
@@ -386,6 +453,7 @@ int main(int argc, char** argv) {
 		switch(opt) {
 		case 'p':
 			port = optarg;
+			fileHeader = "cache/" + port;
 			break;
 		case 'h':
 			coordAddress = optarg;
@@ -415,6 +483,10 @@ int main(int argc, char** argv) {
 		std::cerr << "Invalid Command Line Argument\n";
 		}
 	}
+
+	mkdir("cache", 0777);
+	//mkdir("cache/1235", 0755);
+	mkdir(fileHeader.c_str(), 0777);
 
 	//How server determines its IP address
 	string address = "";

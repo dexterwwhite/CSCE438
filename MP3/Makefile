@@ -37,6 +37,7 @@ coordinator: coord.pb.o coord.grpc.pb.o coordinator.o
 
 clean:
 	rm -f *.txt *.o *.pb.cc *.pb.h tsc tsd coordinator
+	rm -f -r cache
 
 
 # The following is to test your system and ensure a smoother experience.
