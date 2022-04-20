@@ -85,6 +85,8 @@ class Cluster {
     public:
         Cluster(int num) : clusterNum(num)
         {
+            ipAddress = "na";
+            synchPort = 0;
             swap = false;
             master = nullptr;
             slave = nullptr;
@@ -185,6 +187,41 @@ class CoordServiceImpl final : public CoordService::Service {
                 reply->set_port(serverClusters.at(cluster).getSlave()->getPort());
             }
         }
+        else if(request->type() == "synchronizer")
+        {
+            int id = request->id();
+            int cluster = id - 1;
+            int port = stoi(request->arguments(0));
+            {
+                unique_lock<mutex> connectLock(mtx);
+                serverClusters.at(cluster).setSynchPort(port);
+            }
+            int count = 0;
+            for(int i = 0; i < 3; i++)
+            {
+                if(i == cluster)
+                {
+                    continue;
+                }
+                while(i >= serverClusters.size() || serverClusters.at(i).getSynchPort() == 0 || serverClusters.at(i).getIP() == "na")
+                {
+                    sleep(.5);
+                }
+                if(count == 0)
+                {
+                    unique_lock<mutex> connectLock(mtx);
+                    reply->set_ipaddress(serverClusters.at(i).getIP());
+                    reply->set_port(serverClusters.at(i).getSynchPort());
+                    count++;
+                }
+                else
+                {
+                    unique_lock<mutex> connectLock(mtx);
+                    reply->set_address_two(serverClusters.at(i).getIP());
+                    reply->set_port_two(serverClusters.at(i).getSynchPort());
+                }
+            }
+        }
         return Status::OK;
     }
 
@@ -236,6 +273,22 @@ class CoordServiceImpl final : public CoordService::Service {
     
         return Status::OK;
     }
+
+    Status Synch(ServerContext* context, const Request* request, Reply* reply) override {
+        int id = request->id();
+        int cluster = id - 1;
+        unique_lock<mutex> synchLock(mtx);
+        reply->set_port(serverClusters.at(cluster).getMaster()->getPort());
+        if(serverClusters.at(cluster).getSlave()->isActive())
+        {
+            reply->set_port_two(serverClusters.at(cluster).getSlave()->getPort());
+        }
+        else
+        {
+            reply->set_port_two(-1);
+        }
+        return Status::OK;
+    }
 };
 
 void heartBeatThread(int clusterID, Server* server) {
@@ -245,7 +298,7 @@ void heartBeatThread(int clusterID, Server* server) {
             unique_lock<mutex> hbtLock(mtx);
             if(server->check())
             {
-                cout << "Server is alive!" << endl;
+                //cout << "Server is alive!" << endl;
                 server->checkOut();
             }
             else
@@ -297,11 +350,8 @@ int main(int argc, char** argv) {
     }
 
     Cluster c1(1);
-    c1.setIP("0.0.0.0");
     Cluster c2(2);
-    c2.setIP("0.0.0.0");
     Cluster c3(3);
-    c3.setIP("0.0.0.0");
     serverClusters.push_back(c1);
     serverClusters.push_back(c2);
     serverClusters.push_back(c3);

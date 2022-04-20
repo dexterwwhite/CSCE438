@@ -16,7 +16,7 @@ PROTOC = protoc
 GRPC_CPP_PLUGIN = grpc_cpp_plugin
 GRPC_CPP_PLUGIN_PATH ?= `which $(GRPC_CPP_PLUGIN)`
 
-all: system-check tsc tsd coordinator
+all: system-check tsc tsd coordinator synchronizer
 
 tsc: sns.pb.o sns.grpc.pb.o coord.pb.o coord.grpc.pb.o tsc.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
@@ -25,6 +25,9 @@ tsd: sns.pb.o sns.grpc.pb.o coord.pb.o coord.grpc.pb.o tsd.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
 coordinator: coord.pb.o coord.grpc.pb.o coordinator.o
+	$(CXX) $^ $(LDFLAGS) -g -o $@
+
+synchronizer: coord.pb.o coord.grpc.pb.o synch.pb.o synch.grpc.pb.o synchronizer.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
 .PRECIOUS: %.grpc.pb.cc
@@ -36,7 +39,7 @@ coordinator: coord.pb.o coord.grpc.pb.o coordinator.o
 	$(PROTOC) --cpp_out=. $<
 
 clean:
-	rm -f *.txt *.o *.pb.cc *.pb.h tsc tsd coordinator
+	rm -f *.txt *.o *.pb.cc *.pb.h tsc tsd coordinator synchronizer
 	rm -f -r cache
 
 

@@ -89,7 +89,6 @@ using coordinator::CoordService;
 using coordinator::Pulse;
 using grpc::ClientContext;
 using grpc::ClientReaderWriter;
-using grpc::internal::ClientReaderWriterFactory;
 
 struct Client {
   std::string username;
@@ -109,6 +108,8 @@ std::vector<Client> client_db;
 std::unique_ptr<CoordService::Stub> cstub;
 
 std::unique_ptr<SNSService::Stub> slaveStub = nullptr;
+
+std::unique_ptr<SNSService::Stub> selfStub = nullptr;
 
 bool master;
 string fileHeader;
@@ -228,6 +229,14 @@ class SNSServiceImpl final : public SNSService::Service {
 			ofs.open(thirdFile);
 			ofs.close();
 
+			if(request->arguments_size() == 0 || request->arguments(0) != "synch")
+			{
+				string newUser = fileHeader + "/newusers.txt";
+				ofs.open(newUser, std::ofstream::app);
+				ofs << username + "\n";
+				ofs.close();
+			}
+
 		}
 		else
 		{ 
@@ -344,6 +353,43 @@ class SNSServiceImpl final : public SNSService::Service {
 	}
 
 };
+
+void synchronizeUsers() {
+	while(true)
+	{
+		sleep(2);
+		string filename = fileHeader +"/addusers.txt";
+		std::ifstream ifs(filename);
+		if(ifs.is_open())
+		{
+			string username = "";
+			while(!ifs.eof())
+			{
+				getline(ifs, username);
+				ClientContext cc;
+				Request req;
+				req.set_username(username);
+				req.add_arguments("synch");
+				Reply rep;
+				selfStub->Login(&cc, req, &rep);
+			}
+			ifs.close();
+			remove(filename.c_str());
+		}
+	}
+}
+
+void selfSetUp(string address, string port) {
+	string self = address + ":" + port;
+	selfStub = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(grpc::CreateChannel(self, grpc::InsecureChannelCredentials())));
+}
+
+void synchronize(string address, string port) {
+	selfSetUp(address, port);
+
+	thread newUserChecker(synchronizeUsers);
+	newUserChecker.detach();
+}
 
 void heartbeatListen(std::shared_ptr<ClientReaderWriter<Pulse, Pulse>> stream) {
 	Pulse pulse;
@@ -515,6 +561,10 @@ int main(int argc, char** argv) {
 		locateSlave(id);
 	thread heartbeatThread(heartbeat, id);
 	heartbeatThread.detach();
+
+	thread synchronizer(synchronize, address, port);
+	synchronizer.detach();
+
 	RunServer(port);
 
 	return 0;

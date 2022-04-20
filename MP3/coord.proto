@@ -4,10 +4,11 @@ package coordinator;
 
 import "google/protobuf/timestamp.proto";
 
-// The messenger service definition.
+// Coordinator Service Definition
 service CoordService{
   rpc Connect (Request) returns (Reply) {}
-  rpc Heartbeat (stream Pulse) returns (stream Pulse) {} 
+  rpc Heartbeat (stream Pulse) returns (stream Pulse) {}
+  rpc Synch (Request) returns (Reply) {}
 }
 
 message Request {
@@ -19,6 +20,8 @@ message Request {
 message Reply {
   string ipAddress = 1;
   int32 port = 2;
+  string address_two = 3;
+  int32 port_two = 4;
 }
 
 message Pulse {

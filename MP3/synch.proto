@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package synchronizer;
+
+import "google/protobuf/timestamp.proto";
+
+// Coordinator Service Definition
+service SynchService{
+    rpc Newuser (Update) returns (Response) {}
+    rpc Follow (Update) returns (Response) {}
+    rpc Timeline (Update) returns (Response) {}
+}
+
+message Update {
+  int32 id = 1;
+  int32 second_id = 2;
+  repeated string arguments = 3;
+}
+
+message Response{
+  string message = 1;
+}
