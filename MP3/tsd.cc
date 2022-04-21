@@ -31,16 +31,6 @@
  *
  */
 
- /**
-
-	NEED TO DO:
-	Implement Heartbeat() -- DONE?!
-	CURRENT:::: Implement Master->Slave Interaction
-		-for timeline mode, change files to be written to individual server directories
-		-for timeline mode, set up master to create a client reader writer with slave
-	Implement Follow Synchronizer Interaction
- */
-
 #include <ctime>
 
 #include <google/protobuf/timestamp.pb.h>
@@ -94,6 +84,8 @@ using coordinator::Pulse;
 using grpc::ClientContext;
 using grpc::ClientReaderWriter;
 
+//Same Client struct from sample code, added updateReady boolean
+//updateReady signifies whether client timeline has received updates
 struct Client {
   std::string username;
   bool connected = true;
@@ -110,14 +102,20 @@ struct Client {
 //Vector that stores every client that has been created
 std::vector<Client> client_db;
 
+//Client stub for communication with coordinator
 std::unique_ptr<CoordService::Stub> cstub;
 
+//SNS Service client stubs for communicating with slave and with self
 std::unique_ptr<SNSService::Stub> slaveStub = nullptr;
-
 std::unique_ptr<SNSService::Stub> selfStub = nullptr;
 
+//Global vector determining whether server is the master
 bool master;
+
+//File header for ease of use when working with files
+//Follows form "cache/<port#>"
 string fileHeader;
+
 mutex mtx;
 
 //Helper function used to find a Client object given its username
@@ -131,6 +129,9 @@ int find_user(std::string username){
   return -1;
 }
 
+//After client enters timeline mode, every 3 seconds this function checks whether changes
+//have been made to it's timeline. If so, sends the latest 20 posts from the timeline to
+//the client
 void updateTimeline(ServerReaderWriter<Message, Message>* stream, string username) {
 	while(true)
 	{
@@ -139,8 +140,10 @@ void updateTimeline(ServerReaderWriter<Message, Message>* stream, string usernam
 			unique_lock<mutex> utlLock(mtx);
 			int userIndex = find_user(username);
 			Client* client = &client_db.at(userIndex);
+			//If client has updates to its timeline, enters conditional
 			if(client->updateReady)
 			{
+				//Enter timeline is read in
 				string filename = fileHeader + "/" + username + "/timeline.txt";
 				std::ifstream ifs(filename);
 				vector<string> posts;
@@ -156,10 +159,11 @@ void updateTimeline(ServerReaderWriter<Message, Message>* stream, string usernam
 					posts.push_back(line);
 					
 				}
+
+				//If timeline is >20 posts, only sends the latest 20
 				int index = 0;
 				if(posts.size() > 20)
 					index = posts.size() - 20;
-				
 				while(index < posts.size())
 				{
 					Message message;
@@ -171,6 +175,8 @@ void updateTimeline(ServerReaderWriter<Message, Message>* stream, string usernam
 							break;
 						user += posts.at(index).at(i);
 					}
+
+					//Formats post before sending to client
 					string post = posts.at(index);
 					string body = post.substr(i + 1, post.length() - i - 1);
 					message.set_msg("(" + times.at(index) + ") " + user + ": " + body);
@@ -178,6 +184,7 @@ void updateTimeline(ServerReaderWriter<Message, Message>* stream, string usernam
 					index++;
 				}
 
+				//Sets client "update" boolean back to false
 				client->updateReady = false;
 			}
 		}
@@ -186,6 +193,7 @@ void updateTimeline(ServerReaderWriter<Message, Message>* stream, string usernam
 
 class SNSServiceImpl final : public SNSService::Service {
   
+  //Unchanged Service
   Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
     Client user = client_db[find_user(request->username())];
     int index = 0;
@@ -200,6 +208,7 @@ class SNSServiceImpl final : public SNSService::Service {
   }
 
 	Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
+		//If this server is the master, sends Follow to slave with stub
 		if(master && slaveStub != nullptr)
 		{
 			ClientContext cc;
@@ -226,6 +235,8 @@ class SNSServiceImpl final : public SNSService::Service {
 			ofs << username2 << "\n";
 			ofs.close();
 
+			//"Synch" argument is used to determine if this was an update from the synchronizer
+			//If it was not, adds this follow request to the "recentchanges.txt" file to be read in by synchronizer
 			if(request->arguments_size() == 1 || request->arguments(1) != "synch")
 			{
 				google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
@@ -254,6 +265,7 @@ class SNSServiceImpl final : public SNSService::Service {
 		return Status::OK; 
 	}
 
+	//Unused Service
   Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
 	return Status::OK;
     std::string username1 = request->username();
@@ -276,6 +288,7 @@ class SNSServiceImpl final : public SNSService::Service {
   }
   
 	Status Login(ServerContext* context, const Request* request, Reply* reply) override {
+		//If server is master, sends login request to the slave as well
 		if(master && slaveStub != nullptr)
 		{
 			ClientContext cc;
@@ -291,7 +304,7 @@ class SNSServiceImpl final : public SNSService::Service {
 			client_db.push_back(c);
 			reply->set_msg("Login Successful!");
 
-			//Make their directory
+			//Make their directory and other files
 			string dirName = fileHeader + "/" + username;
 			mkdir(dirName.c_str(), 0777);
 			string firstFile = dirName + "/following.txt";
@@ -305,6 +318,8 @@ class SNSServiceImpl final : public SNSService::Service {
 			ofs.open(thirdFile);
 			ofs.close();
 
+			//If this update was not sent over by the synchronizer, adds this as a new user
+			//to the "recentchanges.txt" file.
 			if(request->arguments_size() == 0 || request->arguments(0) != "synch")
 			{
 				google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
@@ -340,6 +355,8 @@ class SNSServiceImpl final : public SNSService::Service {
 	Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
 		std::unique_ptr<ClientReaderWriter<Message, Message>> slaveStream = nullptr;
 		ClientContext cc;
+
+		//If server is master, sets up a stream to send any messages to slave as well
 		if(master && slaveStub != nullptr)
 		{
 			slaveStream = slaveStub->Timeline(&cc);
@@ -359,6 +376,7 @@ class SNSServiceImpl final : public SNSService::Service {
 			int user_index = find_user(username);
 			c = &client_db[user_index];
 
+			//Separate thread for waiting for updates to client timeline
 			if(master && first)
 			{
 				thread updateTLThread(updateTimeline, stream, username);
@@ -366,7 +384,7 @@ class SNSServiceImpl final : public SNSService::Service {
 				first = false;
 			}
 		
-			//Write the current message to "username.txt"
+			//Write the current message to "timeline.txt"
 			std::string filename = fileHeader + "/" + username + "/timeline.txt";
 			std::ofstream user_file(filename,std::ios::app|std::ios::out|std::ios::in);
 			google::protobuf::Timestamp temptime = message.timestamp();
@@ -414,7 +432,7 @@ class SNSServiceImpl final : public SNSService::Service {
 				}    
 				continue;
 			}
-			//Add message to recent changes
+			//Add message to "recentchanges.txt"
 			{
 				unique_lock<mutex> timelineLock(mtx);
 				string tlFile = fileHeader + "/recentchanges.txt";
@@ -424,38 +442,19 @@ class SNSServiceImpl final : public SNSService::Service {
 				ofsTL << username << " " <<message.msg();
 				ofsTL.close();
 			}
-
-			//Send the message to each follower's stream
-			// std::vector<Client*>::const_iterator it;
-			// for(it = c->client_followers.begin(); it!=c->client_followers.end(); it++)
-			// {
-			// 	//DONT SEND TO ANYONE YET
-			// 	Client *temp_client = *it;
-			// 	// if(temp_client->stream!=0 && temp_client->connected)
-			// 	// 	temp_client->stream->Write(message);
-
-			// 	//For each of the current user's followers, put the message in their following.txt file
-			// 	std::string temp_username = temp_client->username;
-			// 	// std::string temp_file = temp_username + "following.txt";
-			// 	// std::ofstream following_file(temp_file,std::ios::app|std::ios::out|std::ios::in);
-			// 	// following_file << fileinput;
-			// 	// following_file.close();
-			// 	temp_client->following_file_size++;
-			// 	std::ofstream user_file(fileHeader + "/" + temp_username + "/timeline.txt",std::ios::app|std::ios::out|std::ios::in);
-			// 	user_file << fileinput;
-			// 	user_file.close();
-			// }
 		}
 		//If the client disconnected from Chat Mode, set connected to false
 		c->connected = false;
 		return Status::OK;
 	}
 
+	//This service is solely used for communicating timeline updates between master and slave
 	Status UpdateTL(ServerContext* context, const Request* request, Reply* reply) override {
 		string time = request->arguments(0);
 		string user = request->arguments(1);
 		string post = request->arguments(2);
 
+		//Writes timelime post to client's own timeline file
 		unique_lock<mutex> synchLock(mtx);
 		string ofsFile = fileHeader + "/" + user + "/timeline.txt";
 		std::ofstream ofs(ofsFile, std::ofstream::app);
@@ -463,6 +462,7 @@ class SNSServiceImpl final : public SNSService::Service {
 		ofs << user << " " << post << "\n";
 		ofs.close();
 
+		//Writes timeline post to client's followers' timeline files
 		int userIndex = find_user(user);
 		Client* origClient = &client_db.at(userIndex);
 		for(int i = 0; i < client_db.at(userIndex).client_followers.size(); i++)
@@ -479,6 +479,8 @@ class SNSServiceImpl final : public SNSService::Service {
 
 };
 
+//Since synchronizer does not directly communicate with server server searches for
+//synchronizer "addchanges.txt" files every 2 seconds
 void synchronizeChanges() {
 	while(true)
 	{
@@ -499,6 +501,7 @@ void synchronizeChanges() {
 					//Reads in username from file
 					getline(ifs, line);
 
+					//Sends login service request to SELF
 					ClientContext cc;
 					Request req;
 					req.set_username(line);
@@ -512,6 +515,8 @@ void synchronizeChanges() {
 					getline(ifs, time);
 					string users;
 					getline(ifs, users);
+
+					//Parses for following username and followed username
 					string user1 = "";
 					int i;
 					for(i = 0; i < users.length(); i++)
@@ -528,9 +533,8 @@ void synchronizeChanges() {
 							break;
 						user2 += users.at(i);
 					}
-					cout << "User 1: " << user1 << endl;
-					cout << "User 2: " << user2 << endl;
 
+					//Sends follow service request to SELF
 					ClientContext cc;
 					Request req;
 					req.set_username(user1);
@@ -545,6 +549,7 @@ void synchronizeChanges() {
 					getline(ifs, time);
 					getline(ifs, line);
 
+					//Parses for username
 					string user = "";
 					int i;
 					for(i = 0; i < line.length(); i++)
@@ -554,6 +559,7 @@ void synchronizeChanges() {
 						user += line.at(i);
 					}
 
+					//Parses for post
 					string post = "";
 					for(i = i + 1; i < line.length(); i++)
 					{
@@ -565,6 +571,7 @@ void synchronizeChanges() {
 					{
 						if(master && slaveStub != nullptr)
 						{
+							//If server is master, also sends timeline post to slave
 							ClientContext ccs;
 							Request tlreq;
 							tlreq.add_arguments(time);
@@ -574,6 +581,7 @@ void synchronizeChanges() {
 							slaveStub->UpdateTL(&ccs, tlreq, &tlrep);
 						}
 
+						//Adds post to user's own timeline
 						unique_lock<mutex> synchLock(mtx);
 						string ofsFile = fileHeader + "/" + user + "/timeline.txt";
 						std::ofstream ofs(ofsFile, std::ofstream::app);
@@ -581,6 +589,7 @@ void synchronizeChanges() {
 						ofs << user << " " << post << "\n";
 						ofs.close();
 
+						//Adds posts to user's followers' timelines and updates updateReady boolean for all users
 						int userIndex = find_user(user);
 						Client* origClient = &client_db.at(userIndex);
 						origClient->updateReady = true;
@@ -603,46 +612,22 @@ void synchronizeChanges() {
 	}
 }
 
-void synchronizeUsers() {
-	while(true)
-	{
-		sleep(2);
-		string filename = fileHeader +"/addusers.txt";
-		std::ifstream ifs(filename);
-		if(ifs.is_open())
-		{
-			string username = "";
-			while(!ifs.eof())
-			{
-				getline(ifs, username);
-				ClientContext cc;
-				Request req;
-				req.set_username(username);
-				req.add_arguments("synch");
-				Reply rep;
-				selfStub->Login(&cc, req, &rep);
-			}
-			ifs.close();
-			remove(filename.c_str());
-		}
-	}
-}
-
+//Sets up channel stub with self
 void selfSetUp(string address, string port) {
 	string self = address + ":" + port;
 	selfStub = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(grpc::CreateChannel(self, grpc::InsecureChannelCredentials())));
 }
 
+//Creates a separate thread to check for synchronizer changes
 void synchronize(string address, string port) {
 	selfSetUp(address, port);
-
-	// thread newUserChecker(synchronizeUsers);
-	// newUserChecker.detach();
 
 	thread changes(synchronizeChanges);
 	changes.detach();
 }
 
+//Listens for a response from coordinator
+//If coordinator sends a heartbeat response, this can only mean the master has died
 void heartbeatListen(std::shared_ptr<ClientReaderWriter<Pulse, Pulse>> stream) {
 	Pulse pulse;
 	while(stream->Read(&pulse))
@@ -651,6 +636,7 @@ void heartbeatListen(std::shared_ptr<ClientReaderWriter<Pulse, Pulse>> stream) {
 		{
 			if(pulse.arguments(0) == "swap")
 			{
+				//Server has been promoted to master
 				cout << "Switching to master!" << endl;
 				master = true;
 			}
@@ -658,9 +644,11 @@ void heartbeatListen(std::shared_ptr<ClientReaderWriter<Pulse, Pulse>> stream) {
 	}
 }
 
+//Server maintains a heartbeat with coordinator
 void heartbeat(int id) {
 	ClientContext context;
 
+	//Sets up initial connection with coordinator
     std::shared_ptr<ClientReaderWriter<Pulse, Pulse>> stream(cstub->Heartbeat(&context));
 	Pulse pulse;
 	pulse.set_id(id);
@@ -673,15 +661,20 @@ void heartbeat(int id) {
 		pulse.set_type("slave");
 	}
 	stream->Write(pulse);
+
+	//Creates separate thread for listening
 	thread listener(heartbeatListen, stream);
 	listener.detach();
 	while(true)
 	{
+		//Every 10 seconds sends a heartbeat pulse
 		sleep(10);
 		stream->Write(pulse);
 	}
 }
 
+//Function for master server to locate ip address and port of slave server
+//Sets up a stub to communicate with the slave
 void locateSlave(int id) {
 	ClientContext context;
 	coordinator::Request request;
@@ -701,6 +694,7 @@ void locateSlave(int id) {
 					slaveInfo, grpc::InsecureChannelCredentials())));
 }
 
+//Function where server connects with coordinator
 void Coordinate(string coordAddress, string coordPort, string address, string port, int id) {
 	string login_info = coordAddress + ":" + coordPort;
 	cstub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
@@ -741,23 +735,6 @@ void RunServer(std::string port_no) {
 
 int main(int argc, char** argv) {
 
-	// string test1 = "010:032";
-	// string test2 = "010:025";
-	// string test3 = "011:025";
-	// if(test1 > test2)
-	// 	cout << "32 > 25" << endl;
-	// else
-	// 	cout << "32 is not greater than 25" << endl;
-	// if(test3 > test2)
-	// 	cout << "11 > 10" << endl;
-	// else
-	// 	cout << "11 is not greater than 10" << endl;
-	// if(test3 > test1)
-	// 	cout << "1125 > 1032" << endl;
-	// else
-	// 	cout << "1125 is not greater than 1032" << endl;
-	// return 0;
-
 	string port = "3010";
 	string coordAddress = "127.0.0.1";
 	string coordPort = "1234";
@@ -784,14 +761,10 @@ int main(int argc, char** argv) {
 			masterOrNot = optarg;
 			if(masterOrNot == "master")
 			{
-				cout << "Optarg: " << optarg << endl;
-				cout << "Hey" << endl;
 				master = true;
 			}
 			else
 			{
-				cout << "Optarg: " << optarg << endl;
-				cout << "Nope" << endl;
 				master = false;
 			}
 			break;
@@ -800,8 +773,8 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	//Sets up server cache files (location for data files)
 	mkdir("cache", 0777);
-	//mkdir("cache/1235", 0755);
 	mkdir(fileHeader.c_str(), 0777);
 
 	//How server determines its IP address
@@ -818,6 +791,8 @@ int main(int argc, char** argv) {
             addr = inet_ntoa(sa->sin_addr);
 			if(count == 0)
 			{
+				//Should send the ipv4 address of the server
+				//If this is not working, simply setting address = "127.0.0.1" will allow this to work
 				address = addr;
 				break;
 			}

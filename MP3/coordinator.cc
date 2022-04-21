@@ -1,11 +1,3 @@
-/**
-
-    NEED TO DO:
-    Implement Heartbeat() -- DONE?!
-    Implement follow synchronizer Connect()
-
-*/
-
 #include <ctime>
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
@@ -42,6 +34,8 @@ using coordinator::Request;
 using coordinator::Reply;
 using coordinator::Pulse;
 
+//Server class
+//Used to help keep track of servers, their ports, and statuses
 class Server {
     private:
         bool isMaster;
@@ -72,6 +66,8 @@ class Server {
         bool isActive() { return active; }
 };
 
+//Server cluster class
+//A higher level view of the cluster, keeps track of servers and synchronizer
 class Cluster {
     private:
         int clusterNum;
@@ -106,6 +102,8 @@ class Cluster {
         void setSynchPort(int port) { synchPort = port; }
         int getSynchPort() { return synchPort; }
         void addClient(int id) { clients.push_back(id); }
+
+        //Switch a slave to master server
         void promote() {
             Server* temp = master;
             master = slave;
@@ -122,13 +120,16 @@ class Cluster {
         bool swapStatus() { return swap; }
 };
 
+//Global vector containing each of the 3 clusters
 vector<Cluster> serverClusters;
 mutex mtx;
 
+//heartBeatThread function declaration for ease of use
 void heartBeatThread(int clusterID, Server* server);
 
 class CoordServiceImpl final : public CoordService::Service {
-  
+
+    //Service where each process (client, server, or synchronizer) may check in and receive information
     Status Connect(ServerContext* context, const Request* request, Reply* reply) override {
 
         if(request->type() == "client")
@@ -138,16 +139,16 @@ class CoordServiceImpl final : public CoordService::Service {
             //ID - 1 means Client #1 will be placed into server cluster 1 (index 0 of the vector of clusters)
             int cluster = (id - 1) % 3;
             {
+                //Returns the ip address and master port of the cluster client is placed in
                 unique_lock<mutex> connectLock(mtx);
                 serverClusters.at(cluster).addClient(id);
                 reply->set_ipaddress(serverClusters.at(cluster).getIP());
                 reply->set_port(serverClusters.at(cluster).getMaster()->getPort());
             }
-            cout << "ID: " << id << endl;
-            cout << "Client will be placed in server cluster " << cluster + 1 << endl;
         }
         else if(request->type() == "server")
         {
+            //Server enters its information to allow coordinator to keep track of it
             int id = request->id();
             int cluster = id - 1;
             bool isMaster = false;
@@ -159,29 +160,31 @@ class CoordServiceImpl final : public CoordService::Service {
                 unique_lock<mutex> connectLock(mtx);
                 if(isMaster)
                 {
+                    //Creates Server object using the connected servers information
                     Server* mServer = new Server(true, port);
                     serverClusters.at(cluster).setIP(request->arguments(1));
                     serverClusters.at(cluster).setMaster(mServer);
                 }
                 else
                 {
+                    //Slave serve does not have to enter ip address information
                     Server* sServer = new Server(false, port);
                     serverClusters.at(cluster).setSlave(sServer);
                 }
             }
-            cout << "Server placed in cluster " << id << endl;
-            cout << "Server is of type " << request->arguments(0) << endl;
-            cout << "Server port is " << port << endl;
         }
         else if(request->type() == "master")
         {
+            //This is how the master server identifies slave server port and ip address
             int id = request->id();
             int cluster = id - 1;
             while(serverClusters.at(cluster).getSlave() == nullptr)
             {
+                //If slave has not connected with coordinator yet, waits to prevent an execption
                 sleep(1);
             }
             {
+                //Returns slave ip address and port
                 unique_lock<mutex> connectLock(mtx);
                 reply->set_ipaddress(serverClusters.at(cluster).getIP());
                 reply->set_port(serverClusters.at(cluster).getSlave()->getPort());
@@ -189,6 +192,8 @@ class CoordServiceImpl final : public CoordService::Service {
         }
         else if(request->type() == "synchronizer")
         {
+
+            //Synchronizer connects with the coordinator and enters its information as well
             int id = request->id();
             int cluster = id - 1;
             int port = stoi(request->arguments(0));
@@ -197,18 +202,23 @@ class CoordServiceImpl final : public CoordService::Service {
                 serverClusters.at(cluster).setSynchPort(port);
             }
             int count = 0;
+
+            //Synchronizer collects the information of the other 2 follower synchronizers for later communication
             for(int i = 0; i < 3; i++)
             {
+                //Does not need to collect its own information
                 if(i == cluster)
                 {
                     continue;
                 }
                 while(i >= serverClusters.size() || serverClusters.at(i).getSynchPort() == 0 || serverClusters.at(i).getIP() == "na")
                 {
+                    //Waits until other synchronizer has connected to prevent an execption once again
                     sleep(.5);
                 }
                 if(count == 0)
                 {
+                    //Count variable is simply to separate synchronizers into separate variables of the reply
                     unique_lock<mutex> connectLock(mtx);
                     reply->set_ipaddress(serverClusters.at(i).getIP());
                     reply->set_port(serverClusters.at(i).getSynchPort());
@@ -225,12 +235,14 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
+    //Bidirectional streaming to simulate server heartbeat
     Status Heartbeat(ServerContext* context, ServerReaderWriter<Pulse, Pulse>* stream) override {
         Pulse pulse;
         int clusterID;
         bool isMaster = false;
         stream->Read(&pulse);
         clusterID = pulse.id() - 1;
+        //Sleeps for 2 seconds to slightly offset check for heartbeat and ensure message makes it on time
         sleep(2);
         if(pulse.type() == "master")
         {
@@ -248,6 +260,8 @@ class CoordServiceImpl final : public CoordService::Service {
 
         while(stream->Read(&pulse))
         {
+
+            //Receives heartbeat from server and sets booleans as well as removes warnings
             if(isMaster)
             {
                 unique_lock<mutex> beatLock(mtx);
@@ -259,6 +273,7 @@ class CoordServiceImpl final : public CoordService::Service {
                 unique_lock<mutex> beatLock(mtx);
                 serverClusters.at(clusterID).getSlave()->checkIn();
                 serverClusters.at(clusterID).getSlave()->rmWarning();
+                //If master server has died, notifies slave that it is now master
                 if(serverClusters.at(clusterID).swapStatus())
                 {
                     Pulse swapMsg;
@@ -274,6 +289,8 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
+    //Synchronizer checks the current master with this Service
+    //If both are active, both ports are sent back
     Status Synch(ServerContext* context, const Request* request, Reply* reply) override {
         int id = request->id();
         int cluster = id - 1;
@@ -291,6 +308,10 @@ class CoordServiceImpl final : public CoordService::Service {
     }
 };
 
+//Every 10 seconds "Checks out" server
+//When a server sends a heartbeat back, they are "check in"
+//After missing a check out, a warning boolean is set for the server
+//If they do not send anything after 20 seconds, the server is determined dead
 void heartBeatThread(int clusterID, Server* server) {
     while(true)
     {
@@ -298,14 +319,13 @@ void heartBeatThread(int clusterID, Server* server) {
             unique_lock<mutex> hbtLock(mtx);
             if(server->check())
             {
-                //cout << "Server is alive!" << endl;
                 server->checkOut();
             }
             else
             {
                 if(server->warningStatus())
                 {
-                    cout << "Server is determined dead" << endl;
+                    cout << "Server has not responded for 2 heartbeats: Determined dead" << endl;
                     if(server->master())
                     {
                         serverClusters.at(clusterID).swapOn();
@@ -338,7 +358,7 @@ void RunServer(std::string port_no) {
 
 int main(int argc, char** argv) {
   
-    std::string port = "3010";
+    std::string port = "1234";
     int opt = 0;
     while ((opt = getopt(argc, argv, "p:")) != -1){
         switch(opt) {
@@ -349,6 +369,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    //Creates all 3 server clusters and adds them to global vector
     Cluster c1(1);
     Cluster c2(2);
     Cluster c3(3);
