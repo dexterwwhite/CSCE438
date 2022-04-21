@@ -51,6 +51,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <mutex>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -71,6 +72,9 @@ using std::cout;
 using std::endl;
 using std::string;
 using std::thread;
+using std::mutex;
+using std::unique_lock;
+using std::vector;
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
 using grpc::Server;
@@ -93,6 +97,7 @@ using grpc::ClientReaderWriter;
 struct Client {
   std::string username;
   bool connected = true;
+  bool updateReady = false;
   int following_file_size = 0;
   std::vector<Client*> client_followers;
   std::vector<Client*> client_following;
@@ -113,6 +118,7 @@ std::unique_ptr<SNSService::Stub> selfStub = nullptr;
 
 bool master;
 string fileHeader;
+mutex mtx;
 
 //Helper function used to find a Client object given its username
 int find_user(std::string username){
@@ -123,6 +129,59 @@ int find_user(std::string username){
     index++;
   }
   return -1;
+}
+
+void updateTimeline(ServerReaderWriter<Message, Message>* stream, string username) {
+	while(true)
+	{
+		sleep(3);
+		{
+			unique_lock<mutex> utlLock(mtx);
+			int userIndex = find_user(username);
+			Client* client = &client_db.at(userIndex);
+			if(client->updateReady)
+			{
+				string filename = fileHeader + "/" + username + "/timeline.txt";
+				std::ifstream ifs(filename);
+				vector<string> posts;
+				vector<string> times;
+				string line = "";
+				while(!ifs.eof())
+				{
+					getline(ifs, line);
+					if(line == "")
+						break;
+					times.push_back(line);
+					getline(ifs, line);
+					posts.push_back(line);
+					
+				}
+				int index = 0;
+				if(posts.size() > 20)
+					index = posts.size() - 20;
+				
+				while(index < posts.size())
+				{
+					Message message;
+					string user = "";
+					int i;
+					for(i = 0; i < posts.at(index).length(); i++)
+					{
+						if(posts.at(index).at(i) == ' ')
+							break;
+						user += posts.at(index).at(i);
+					}
+					string post = posts.at(index);
+					string body = post.substr(i + 1, post.length() - i - 1);
+					message.set_msg("(" + times.at(index) + ") " + user + ": " + body);
+					stream->Write(message);
+					index++;
+				}
+
+				client->updateReady = false;
+			}
+		}
+	}
 }
 
 class SNSServiceImpl final : public SNSService::Service {
@@ -166,6 +225,23 @@ class SNSServiceImpl final : public SNSService::Service {
 			std::ofstream ofs(fileName1, std::ofstream::app);
 			ofs << username2 << "\n";
 			ofs.close();
+
+			if(request->arguments_size() == 1 || request->arguments(1) != "synch")
+			{
+				google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
+				timestamp->set_seconds(time(NULL));
+				timestamp->set_nanos(0);
+				string time = google::protobuf::util::TimeUtil::ToString(*timestamp);
+				{
+					unique_lock<mutex> followLock(mtx);
+					string changeFilename = fileHeader + "/recentchanges.txt";
+					ofs.open(changeFilename, std::ofstream::app);
+					ofs << "FOLLOW\n";
+					ofs << time << "\n";
+					ofs << username1 << " " << username2 << "\n";
+					ofs.close();
+				}
+			}
 
 			user2->client_followers.push_back(user1);
 			string fileName2 = fileHeader + "/" + username2 + "/followers.txt";
@@ -231,9 +307,17 @@ class SNSServiceImpl final : public SNSService::Service {
 
 			if(request->arguments_size() == 0 || request->arguments(0) != "synch")
 			{
-				string newUser = fileHeader + "/newusers.txt";
+				google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
+				timestamp->set_seconds(time(NULL));
+				timestamp->set_nanos(0);
+				string time = google::protobuf::util::TimeUtil::ToString(*timestamp);
+
+				unique_lock<mutex> loginLock(mtx);
+				string newUser = fileHeader + "/recentchanges.txt";
 				ofs.open(newUser, std::ofstream::app);
-				ofs << username + "\n";
+				ofs << "NEWUSER" << "\n";
+				ofs << time << "\n";
+				ofs << username << "\n";
 				ofs.close();
 			}
 
@@ -254,36 +338,33 @@ class SNSServiceImpl final : public SNSService::Service {
 	}
 
 	Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
-		cout << "begin" << endl;
 		std::unique_ptr<ClientReaderWriter<Message, Message>> slaveStream = nullptr;
 		ClientContext cc;
 		if(master && slaveStub != nullptr)
 		{
-			cout << "Entered initial if" << endl;
-			//std::shared_ptr<ClientReaderWriter<Message, Message>> slav(slaveStub->Timeline(&context));
-			//Message mensage;
-			//slav->Write(mensage);
-			//slaveStream = slav;
 			slaveStream = slaveStub->Timeline(&cc);
-			//slaveStream = ClientReaderWriterFactory<Message, Message>::Create(slaveStub->channel(),Timeline(), &context);
 		}
-		cout << "After slave stream" << endl;
 
+		bool first = true;
 		Message message;
 		Client *c;
 		while(stream->Read(&message)) 
 		{
-			cout << "Entered while" << endl;
 			if(master && slaveStream != nullptr)
 			{
-				cout << "Entered if!" << endl;
 				Message m1 = message;
 				slaveStream->Write(m1);
 			}
-			cout << "After slave stream write" << endl;
 			std::string username = message.username();
 			int user_index = find_user(username);
 			c = &client_db[user_index];
+
+			if(master && first)
+			{
+				thread updateTLThread(updateTimeline, stream, username);
+				updateTLThread.detach();
+				first = false;
+			}
 		
 			//Write the current message to "username.txt"
 			std::string filename = fileHeader + "/" + username + "/timeline.txt";
@@ -293,7 +374,10 @@ class SNSServiceImpl final : public SNSService::Service {
 			std::string fileinput = time+" :: "+message.username()+":"+message.msg();
 			//"Set Stream" is the default message from the client to initialize the stream
 			if(message.msg() != "Set Stream")
-				user_file << fileinput;
+			{
+				//user_file << fileinput;
+				cout << "";
+			}
 			//If message = "Set Stream", print the first 20 chats from the people you follow
 			else
 			{
@@ -305,54 +389,219 @@ class SNSServiceImpl final : public SNSService::Service {
 				std::ifstream in(fname);
 				int count = 0;
 				//Read the last up-to-20 lines (newest 20 messages) from userfollowing.txt
-				while(getline(in, line))
+				while(!in.eof())
 				{
-					if(c->following_file_size > 20)
-					{
-						if(count < c->following_file_size-20)
-						{
-							count++;
-							continue;
-						}
-					}
-					newest_twenty.push_back(line);
+					getline(in, line);
+					if(line == "")
+						break;
+					string post = "(" + line + ") ";
+					getline(in, line);
+					post += line;
+					newest_twenty.push_back(post);
+					line = "";
 				}
 				Message new_msg; 
 				in.close();
+
+				int index = 0;
+				if(newest_twenty.size() > 20)
+					index = newest_twenty.size() - 20;
 				//Send the newest messages to the client to be displayed
-				for(int i = 0; i < newest_twenty.size(); i++)
+				for(int i = index; i < newest_twenty.size(); i++)
 				{
 					new_msg.set_msg(newest_twenty[i]);
 					stream->Write(new_msg);
 				}    
 				continue;
 			}
-			//Send the message to each follower's stream
-			std::vector<Client*>::const_iterator it;
-			for(it = c->client_followers.begin(); it!=c->client_followers.end(); it++)
+			//Add message to recent changes
 			{
-				Client *temp_client = *it;
-				if(temp_client->stream!=0 && temp_client->connected)
-					temp_client->stream->Write(message);
-
-				//For each of the current user's followers, put the message in their following.txt file
-				std::string temp_username = temp_client->username;
-				std::string temp_file = temp_username + "following.txt";
-				std::ofstream following_file(temp_file,std::ios::app|std::ios::out|std::ios::in);
-				following_file << fileinput;
-				following_file.close();
-				temp_client->following_file_size++;
-				std::ofstream user_file(fileHeader + "/" + temp_username + "/timeline.txt",std::ios::app|std::ios::out|std::ios::in);
-				user_file << fileinput;
-				user_file.close();
+				unique_lock<mutex> timelineLock(mtx);
+				string tlFile = fileHeader + "/recentchanges.txt";
+				std::ofstream ofsTL(tlFile, std::ofstream::app);
+				ofsTL << "TIMELINE" << "\n";
+				ofsTL << time << "\n";
+				ofsTL << username << " " <<message.msg();
+				ofsTL.close();
 			}
+
+			//Send the message to each follower's stream
+			// std::vector<Client*>::const_iterator it;
+			// for(it = c->client_followers.begin(); it!=c->client_followers.end(); it++)
+			// {
+			// 	//DONT SEND TO ANYONE YET
+			// 	Client *temp_client = *it;
+			// 	// if(temp_client->stream!=0 && temp_client->connected)
+			// 	// 	temp_client->stream->Write(message);
+
+			// 	//For each of the current user's followers, put the message in their following.txt file
+			// 	std::string temp_username = temp_client->username;
+			// 	// std::string temp_file = temp_username + "following.txt";
+			// 	// std::ofstream following_file(temp_file,std::ios::app|std::ios::out|std::ios::in);
+			// 	// following_file << fileinput;
+			// 	// following_file.close();
+			// 	temp_client->following_file_size++;
+			// 	std::ofstream user_file(fileHeader + "/" + temp_username + "/timeline.txt",std::ios::app|std::ios::out|std::ios::in);
+			// 	user_file << fileinput;
+			// 	user_file.close();
+			// }
 		}
 		//If the client disconnected from Chat Mode, set connected to false
 		c->connected = false;
 		return Status::OK;
 	}
 
+	Status UpdateTL(ServerContext* context, const Request* request, Reply* reply) override {
+		string time = request->arguments(0);
+		string user = request->arguments(1);
+		string post = request->arguments(2);
+
+		unique_lock<mutex> synchLock(mtx);
+		string ofsFile = fileHeader + "/" + user + "/timeline.txt";
+		std::ofstream ofs(ofsFile, std::ofstream::app);
+		ofs << time << "\n";
+		ofs << user << " " << post << "\n";
+		ofs.close();
+
+		int userIndex = find_user(user);
+		Client* origClient = &client_db.at(userIndex);
+		for(int i = 0; i < client_db.at(userIndex).client_followers.size(); i++)
+		{
+			Client* temp = client_db.at(userIndex).client_followers.at(i);
+			string followerfile = fileHeader + "/" + temp->username + "/timeline.txt";
+			ofs.open(followerfile, std::ofstream::app);
+			ofs << time << "\n";
+			ofs << user << " " << post << "\n";
+			ofs.close();
+		}
+		return Status::OK;
+	}
+
 };
+
+void synchronizeChanges() {
+	while(true)
+	{
+		sleep(2);
+		string filename = fileHeader + "/addchanges.txt";
+		std::ifstream ifs(filename);
+		if(ifs.is_open())
+		{
+			string line = "";
+			while(!ifs.eof())
+			{
+				getline(ifs, line);
+				if(line == "NEWUSER")
+				{
+					//Reads in timestamp from file
+					getline(ifs, line);
+
+					//Reads in username from file
+					getline(ifs, line);
+
+					ClientContext cc;
+					Request req;
+					req.set_username(line);
+					req.add_arguments("synch");
+					Reply rep;
+					selfStub->Login(&cc, req, &rep);
+				}
+				else if(line == "FOLLOW")
+				{
+					string time;
+					getline(ifs, time);
+					string users;
+					getline(ifs, users);
+					string user1 = "";
+					int i;
+					for(i = 0; i < users.length(); i++)
+					{
+						if(users.at(i) == ' ')
+							break;
+						user1 += users.at(i);
+					}
+
+					string user2 = "";
+					for(i = i + 1; i < users.length(); i++)
+					{
+						if(users.at(i) == '\n')
+							break;
+						user2 += users.at(i);
+					}
+					cout << "User 1: " << user1 << endl;
+					cout << "User 2: " << user2 << endl;
+
+					ClientContext cc;
+					Request req;
+					req.set_username(user1);
+					req.add_arguments(user2);
+					req.add_arguments("synch");
+					Reply rep;
+					selfStub->Follow(&cc, req, &rep);
+				}
+				else if(line == "TIMELINE")
+				{
+					string time;
+					getline(ifs, time);
+					getline(ifs, line);
+
+					string user = "";
+					int i;
+					for(i = 0; i < line.length(); i++)
+					{
+						if(line.at(i) == ' ')
+							break;
+						user += line.at(i);
+					}
+
+					string post = "";
+					for(i = i + 1; i < line.length(); i++)
+					{
+						if(line.at(i) == '\n')
+							break;
+						post += line.at(i);
+					}
+
+					{
+						if(master && slaveStub != nullptr)
+						{
+							ClientContext ccs;
+							Request tlreq;
+							tlreq.add_arguments(time);
+							tlreq.add_arguments(user);
+							tlreq.add_arguments(post);
+							Reply tlrep;
+							slaveStub->UpdateTL(&ccs, tlreq, &tlrep);
+						}
+
+						unique_lock<mutex> synchLock(mtx);
+						string ofsFile = fileHeader + "/" + user + "/timeline.txt";
+						std::ofstream ofs(ofsFile, std::ofstream::app);
+						ofs << time << "\n";
+						ofs << user << " " << post << "\n";
+						ofs.close();
+
+						int userIndex = find_user(user);
+						Client* origClient = &client_db.at(userIndex);
+						origClient->updateReady = true;
+						for(int i = 0; i < client_db.at(userIndex).client_followers.size(); i++)
+						{
+							Client* temp = client_db.at(userIndex).client_followers.at(i);
+							string followerfile = fileHeader + "/" + temp->username + "/timeline.txt";
+							ofs.open(followerfile, std::ofstream::app);
+							ofs << time << "\n";
+							ofs << user << " " << post << "\n";
+							ofs.close();
+							temp->updateReady = true;
+						}
+					}
+				}
+			}
+			ifs.close();
+			remove(filename.c_str());
+		}
+	}
+}
 
 void synchronizeUsers() {
 	while(true)
@@ -387,8 +636,11 @@ void selfSetUp(string address, string port) {
 void synchronize(string address, string port) {
 	selfSetUp(address, port);
 
-	thread newUserChecker(synchronizeUsers);
-	newUserChecker.detach();
+	// thread newUserChecker(synchronizeUsers);
+	// newUserChecker.detach();
+
+	thread changes(synchronizeChanges);
+	changes.detach();
 }
 
 void heartbeatListen(std::shared_ptr<ClientReaderWriter<Pulse, Pulse>> stream) {
@@ -488,6 +740,24 @@ void RunServer(std::string port_no) {
 }
 
 int main(int argc, char** argv) {
+
+	// string test1 = "010:032";
+	// string test2 = "010:025";
+	// string test3 = "011:025";
+	// if(test1 > test2)
+	// 	cout << "32 > 25" << endl;
+	// else
+	// 	cout << "32 is not greater than 25" << endl;
+	// if(test3 > test2)
+	// 	cout << "11 > 10" << endl;
+	// else
+	// 	cout << "11 is not greater than 10" << endl;
+	// if(test3 > test1)
+	// 	cout << "1125 > 1032" << endl;
+	// else
+	// 	cout << "1125 is not greater than 1032" << endl;
+	// return 0;
+
 	string port = "3010";
 	string coordAddress = "127.0.0.1";
 	string coordPort = "1234";

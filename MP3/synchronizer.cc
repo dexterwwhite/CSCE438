@@ -2,6 +2,8 @@
 #include <string>
 #include <fstream>
 #include <thread>
+#include <mutex>
+#include <vector>
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -18,6 +20,9 @@ using std::ifstream;
 using std::ofstream;
 using std::thread;
 using std::pair;
+using std::mutex;
+using std::unique_lock;
+using std::vector;
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
 using grpc::ServerBuilder;
@@ -47,7 +52,11 @@ std::unique_ptr<SynchService::Stub> fsStub1 = nullptr;
 
 std::unique_ptr<SynchService::Stub> fsStub2 = nullptr;
 
+std::unique_ptr<SynchService::Stub> selfStub = nullptr;
+
 int id = 1;
+
+mutex mtx;
 
 class SynchServiceImpl final : public SynchService::Service {
   
@@ -66,7 +75,94 @@ class SynchServiceImpl final : public SynchService::Service {
         return Status::OK;
     }
 
-	Status Follow(ServerContext* context, const Update* update, Response* response) override {
+	Status Change(ServerContext* context, const Update* update, Response* response) override {
+		pair<int, int> ports = synch();
+		string filename = "cache/" + std::to_string(ports.first) + "/addchanges.txt";
+		{
+			unique_lock<mutex> followLock(mtx);
+			ifstream ifs(filename);
+			if(ifs.is_open())
+			{
+				vector<string> prevLines;
+				string line = "";
+				while(!ifs.eof())
+				{
+					getline(ifs, line);
+					if(line == "")
+						break;
+					prevLines.push_back(line);
+					line = "";
+				}
+				ifs.close();
+
+				int vecIndex = 0;
+				int argIndex = 0;
+				ofstream ofs(filename);
+				while(argIndex < update->arguments_size())
+				{
+					if(vecIndex >= prevLines.size())
+					{
+						while(argIndex < update->arguments_size())
+						{
+							if(argIndex == update->arguments_size() - 1)
+							{
+								ofs << update->arguments(argIndex);
+							}
+							else
+								ofs << update->arguments(argIndex) << "\n";
+							argIndex++;
+						}
+						break;
+					}
+					vecIndex++;
+					string vecTime = prevLines.at(vecIndex);
+					argIndex++;
+					string argTime = update->arguments(argIndex);
+					if(argTime > vecTime)
+					{
+						ofs << prevLines.at(vecIndex - 1) << "\n";
+						ofs << prevLines.at(vecIndex) << "\n";
+						ofs << prevLines.at(vecIndex + 1) << "\n";
+						vecIndex += 2;
+						argIndex--;
+					}
+					else
+					{
+						ofs << update->arguments(argIndex - 1) << "\n";
+						ofs << update->arguments(argIndex) << "\n";
+						ofs << update->arguments(argIndex + 1) << "\n";\
+						argIndex += 2;
+						vecIndex--;
+					}
+				}
+				if(vecIndex != prevLines.size())
+				{
+					while(vecIndex < prevLines.size())
+					{
+						if(vecIndex == prevLines.size() - 1)
+						{
+							ofs << prevLines.at(vecIndex);
+						}
+						else
+							ofs << prevLines.at(vecIndex) << "\n";
+						vecIndex++;
+					}
+				}
+				ofs.close();
+			}
+			else
+			{
+				ofstream ofs(filename);
+				for(int i = 0; i < update->arguments_size(); i++)
+				{
+					if(i != update->arguments_size() - 1)
+						ofs << update->arguments(i) << "\n";
+					else
+						ofs << update->arguments(i);
+				}
+				ofs.close();
+			}
+		}
 		return Status::OK;
 	}
 
@@ -122,6 +218,57 @@ void checkNewUsers(pair<int, int> ports) {
 	}
 }
 
+void checkChanges(pair<int, int> ports) {
+	string filename = "cache/" + std::to_string(ports.first) + "/recentchanges.txt";
+	ifstream ifs(filename);
+	if(ifs.is_open())
+	{
+		Update up;
+		string line = "";
+		while(!ifs.eof())
+		{
+			getline(ifs, line);
+			if(line == "")
+				break;
+			up.add_arguments(line);
+			line = "";
+		}
+		ifs.close();
+
+		int rmVal = remove(filename.c_str());
+
+		if(ports.second != -1)
+		{
+			string filename2 = "cache/" + std::to_string(ports.second) + "/recentchanges.txt";
+			rmVal = remove(filename2.c_str());
+		}
+
+		ClientContext cc1;
+		ClientContext cc2;
+		Response resp1;
+		Response resp2;
+		Status status1 = fsStub1->Change(&cc1, up, &resp1);
+		if(!status1.ok())
+		{
+			cout << "FS1 grpc error" << endl;
+		}
+		Status status2 = fsStub2->Change(&cc2, up, &resp2);
+		if(!status2.ok())
+		{
+			cout << "FS2 grpc error" << endl;
+		}
+
+		ClientContext cc3;
+		Response resp3;
+		Status status3 = selfStub->Change(&cc3, up, &resp3);
+	}
+	else
+	{
+		cout << "No new changes detected" << endl;
+		return;
+	}
+}
+
 pair<int, int> synch() {
 	ClientContext cc;
 	Request req;
@@ -137,13 +284,21 @@ pair<int, int> synch() {
 	return ports;
 }
 
+void selfSetUp(string address, string port) {
+	sleep(3);
+	string self = address + ":" + port;
+	selfStub = std::unique_ptr<SynchService::Stub>(SynchService::NewStub(grpc::CreateChannel(self, grpc::InsecureChannelCredentials())));
+}
+
 void run() {
 	while(true)
 	{
 		sleep(30);
 		pair<int, int> ports = synch();
-		thread newUserThread(checkNewUsers, ports);
-		newUserThread.detach();
+		// thread newUserThread(checkNewUsers, ports);
+		// newUserThread.detach();
+		thread changes(checkChanges, ports);
+		changes.detach();
 	}
 }
 
@@ -216,6 +371,9 @@ int main(int argc, char** argv) {
 		}
 	}
 	setup(coordAddress, coordPort, port);
+
+	thread setupThread(selfSetUp, "127.0.0.1", port);
+	setupThread.detach();
 
 	thread runnerThread(run);
 	runnerThread.detach();

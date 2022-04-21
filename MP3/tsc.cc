@@ -376,10 +376,16 @@ void Client::Timeline(const std::string& username) {
     std::thread reader([username, stream]() {
             Message m;
             while(stream->Read(&m)){
-
-            google::protobuf::Timestamp temptime = m.timestamp();
-            std::time_t time = temptime.seconds();
-            displayPostMessage(m.username(), m.msg(), time);
+                if(m.has_timestamp())
+                {
+                    google::protobuf::Timestamp temptime = m.timestamp();
+                    std::time_t time = temptime.seconds();
+                    displayPostMessage(m.username(), m.msg(), time);
+                }
+                else
+                {
+                    cout << m.msg() << endl;
+                }
             }
             });
 
