@@ -114,6 +114,7 @@ int Client::connectTo()
     // Please refer to gRpc tutorial how to create a stub.
 	// ------------------------------------------------------------
 
+    //Client Connects to coordinator
     std::string login_info = hostname + ":" + port;
     cstub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
                grpc::CreateChannel(
@@ -124,6 +125,8 @@ int Client::connectTo()
         return -1;
     }
 
+    //Client creates gRPC channel with master server of server cluster
+    //This info was given by the coordinator
     login_info = hostname + ":" + port;
     stub_ = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(
                grpc::CreateChannel(
@@ -336,6 +339,7 @@ IReply Client::Login() {
     return ire;
 }
 
+//Connecting to coordinator and receiving master server address and port
 IReply Client::Connect() {
     coordinator::Request request;
     request.set_type("client");

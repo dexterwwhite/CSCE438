@@ -44,38 +44,29 @@ using synchronizer::SynchService;
 using synchronizer::Update;
 using synchronizer::Response;
 
+//Declaration of synch() function
 pair<int, int> synch();
 
+//Stub created for communication with Coordinator
 std::unique_ptr<CoordService::Stub> cstub = nullptr;
 
+//Stubs for the other 2 follower synchronizers
 std::unique_ptr<SynchService::Stub> fsStub1 = nullptr;
-
 std::unique_ptr<SynchService::Stub> fsStub2 = nullptr;
 
+//Stub for communication with self
 std::unique_ptr<SynchService::Stub> selfStub = nullptr;
 
+//Global variables
 int id = 1;
-
 mutex mtx;
 
 class SynchServiceImpl final : public SynchService::Service {
-  
-    Status Newuser(ServerContext* context, const Update* update, Response* response) override {
-		pair<int, int> ports = synch();
-		string filename = "cache/" + std::to_string(ports.first) + "/addusers.txt";
-		ofstream ofs(filename);
-		for(int i = 0; i < update->arguments_size(); i++)
-		{
-			if(i != update->arguments_size() - 1)
-				ofs << update->arguments(i) << "\n";
-			else
-				ofs << update->arguments(i);
-		}
-		ofs.close();
-        return Status::OK;
-    }
 
+	//Service for communicating changes to other server clusters
+	//Only used for follower synchronizer to follower synchronizer communication
 	Status Change(ServerContext* context, const Update* update, Response* response) override {
+		//Checks for master server port from coordinator
 		pair<int, int> ports = synch();
 		string filename = "cache/" + std::to_string(ports.first) + "/addchanges.txt";
 		{
@@ -83,6 +74,7 @@ class SynchServiceImpl final : public SynchService::Service {
 			ifstream ifs(filename);
 			if(ifs.is_open())
 			{
+				//If "addchanges.txt" already exists, adds each line to a vector
 				vector<string> prevLines;
 				string line = "";
 				while(!ifs.eof())
@@ -95,6 +87,7 @@ class SynchServiceImpl final : public SynchService::Service {
 				}
 				ifs.close();
 
+				//Merges previous "addchanges.txt" data with data from update parameter, sorting by time
 				int vecIndex = 0;
 				int argIndex = 0;
 				ofstream ofs(filename);
@@ -152,6 +145,7 @@ class SynchServiceImpl final : public SynchService::Service {
 			}
 			else
 			{
+				//If there was not a previous "addchanges.txt", creates one and fills in data
 				ofstream ofs(filename);
 				for(int i = 0; i < update->arguments_size(); i++)
 				{
@@ -165,64 +159,15 @@ class SynchServiceImpl final : public SynchService::Service {
 		}
 		return Status::OK;
 	}
-
-	Status Timeline(ServerContext* context, const Update* update, Response* response) override {
-		return Status::OK;
-	}
 };
 
-void checkNewUsers(pair<int, int> ports) {
-	string filename = "cache/" + std::to_string(ports.first) + "/newusers.txt";
-	ifstream ifs(filename);
-	if(ifs.is_open())
-	{
-		Update up;
-		string username = "";
-		while(!ifs.eof())
-		{
-			getline(ifs, username);
-			if(username.size() == 0)
-				break;
-			up.add_arguments(username);
-			username = "";
-		}
-		ifs.close();
-
-		int rmVal = remove(filename.c_str());
-
-		if(ports.second != -1)
-		{
-			string filename2 = "cache/" + std::to_string(ports.second) + "/newusers.txt";
-			rmVal = remove(filename2.c_str());
-		}
-
-		ClientContext cc1;
-		ClientContext cc2;
-		Response resp1;
-		Response resp2;
-		Status status1 = fsStub1->Newuser(&cc1, up, &resp1);
-		if(!status1.ok())
-		{
-			cout << "FS1 grpc error" << endl;
-		}
-		Status status2 = fsStub2->Newuser(&cc2, up, &resp2);
-		if(!status2.ok())
-		{
-			cout << "FS2 grpc error" << endl;
-		}
-	}
-	else
-	{
-		cout << "No new users detected." << endl;
-		return;
-	}
-}
-
+//Checks the "recentchanges.txt" file and sends any data included to synchronizers in other server clusters
 void checkChanges(pair<int, int> ports) {
 	string filename = "cache/" + std::to_string(ports.first) + "/recentchanges.txt";
 	ifstream ifs(filename);
 	if(ifs.is_open())
 	{
+		//Reads in all data from "recentchanges.txt"
 		Update up;
 		string line = "";
 		while(!ifs.eof())
@@ -235,14 +180,17 @@ void checkChanges(pair<int, int> ports) {
 		}
 		ifs.close();
 
+		//Deletes file, allows synchronizer to know it is up to date
 		int rmVal = remove(filename.c_str());
 
+		//If both the slave and master are active, deletes "recentchanges.txt" from both servers
 		if(ports.second != -1)
 		{
 			string filename2 = "cache/" + std::to_string(ports.second) + "/recentchanges.txt";
 			rmVal = remove(filename2.c_str());
 		}
 
+		//Shares changes with other follower synchronizers
 		ClientContext cc1;
 		ClientContext cc2;
 		Response resp1;
@@ -258,17 +206,15 @@ void checkChanges(pair<int, int> ports) {
 			cout << "FS2 grpc error" << endl;
 		}
 
+		//Shares changes with self
 		ClientContext cc3;
 		Response resp3;
 		Status status3 = selfStub->Change(&cc3, up, &resp3);
 	}
-	else
-	{
-		cout << "No new changes detected" << endl;
-		return;
-	}
 }
 
+//Allows synchronizer to check the current master server for the cluster
+//If both servers are currently active, the first value is master port and second value is slave port
 pair<int, int> synch() {
 	ClientContext cc;
 	Request req;
@@ -284,19 +230,20 @@ pair<int, int> synch() {
 	return ports;
 }
 
+//Sets up a stub for communication with itself
 void selfSetUp(string address, string port) {
 	sleep(3);
 	string self = address + ":" + port;
 	selfStub = std::unique_ptr<SynchService::Stub>(SynchService::NewStub(grpc::CreateChannel(self, grpc::InsecureChannelCredentials())));
 }
 
+//Synchronizer runs every 30 seconds
+//Checks current master server with synch() before checking for changes
 void run() {
 	while(true)
 	{
 		sleep(30);
 		pair<int, int> ports = synch();
-		// thread newUserThread(checkNewUsers, ports);
-		// newUserThread.detach();
 		thread changes(checkChanges, ports);
 		changes.detach();
 	}
@@ -315,7 +262,9 @@ void RunServer(std::string port_no) {
   server->Wait();
 }
 
+//Synchronizer sets up a channel with coordinator and other 2 synchronizers
 void setup(string coordAddress, string coordPort, string port) {
+	//connects to coordinator
 	string login_info = coordAddress + ":" + coordPort;
     cstub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
                grpc::CreateChannel(
@@ -332,19 +281,16 @@ void setup(string coordAddress, string coordPort, string port) {
         exit(1);
     }
 
+	//Connects to other follower synchronizers
 	login_info = rep.ipaddress() + ":" + std::to_string(rep.port());
     fsStub1 = std::unique_ptr<SynchService::Stub>(SynchService::NewStub(
                grpc::CreateChannel(
                     login_info, grpc::InsecureChannelCredentials())));
 	
-	cout << "FS " << id << " connected to FS at " << login_info << endl;
-	
 	login_info = rep.address_two() + ":" + std::to_string(rep.port_two());
     fsStub2 = std::unique_ptr<SynchService::Stub>(SynchService::NewStub(
                grpc::CreateChannel(
                     login_info, grpc::InsecureChannelCredentials())));
-
-	cout << "FS " << id << " connected to FS at " << login_info << endl;
 }
 
 int main(int argc, char** argv) {
