@@ -1,3 +1,9 @@
+/**
+	This is the only file for my Time of the Day Most Often Tweets code.
+	This code uses almost all of the code from the tutorial with only a 
+	few changes that were made to the mapper class.
+*/
+
 import java.io.IOException;
 import java.util.StringTokenizer;
 
@@ -21,20 +27,17 @@ public class WordCount {
 
     public void map(Object key, Text value, Context context
                     ) throws IOException, InterruptedException {
-      // StringTokenizer itr = new StringTokenizer(value.toString());
-      // while (itr.hasMoreTokens()) {
-		  // String word = itr.nextToken();
-        // word.set(itr.nextToken());
-        // context.write(word, one);
-      // }
-	  String line = value.toString();
-	  if(line.length() > 0 && line.charAt(0) == 'T')
-	  {
-		  int index = line.indexOf(":");
-		  word.set(line.substring(index - 2, index));
-		  context.write(word, one);
-	  }
-    }
+		
+		//Checks if the current line is a "Time" line
+		String line = value.toString();
+		if(line.length() > 0 && line.charAt(0) == 'T')
+		{
+			//Uses the time from the line as the key value
+			int index = line.indexOf(":");
+			word.set(line.substring(index - 2, index));
+			context.write(word, one);
+		}
+	}
   }
 
   public static class IntSumReducer
