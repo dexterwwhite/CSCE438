@@ -1,0 +1,12 @@
+//Making this in case there are any issues running my code
+//These commands were how I was able to personally run both jobs
+
+Compile and run Time of Day Most Often Tweets:
+	hadoop com.sun.tools.javac.Main WordCount.java
+	jar -cvf WordCount.jar WordCount*.class
+	hadoop jar WordCount.jar WordCount /user/root/data /user/root/output
+
+Compile and run Time of Day When Usually People Go To Sleep:
+	hadoop com.sun.tools.javac.Main -d . IFNLine.java NRecordReader.java NLineDriver.java
+	jar -cvf NLRR.jar nlrr/IFNLine*.class nlrr/NRecordReader*.class nlrr/NLineDriver*.class
+	hadoop jar NLRR.jar nlrr.NLineDriver /user/root/data /user/root/output
