@@ -1,8 +1,9 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
+/**
+	This is part of my code for "Time of Day When Usually People Go To Sleep".
+	This class is where the actual code for my modified record reader is defined.
+	The changes to this class essentially make it so 4 lines from the file are 
+	concatenated into a single input line for the mapper.
+*/
 package nlrr;
 
 import java.util.Arrays;
@@ -19,10 +20,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 
-/**
- *
- * @author kamal
- */
 class NRecordReader extends RecordReader<LongWritable, Text> {
 
     private LongWritable key;
@@ -42,9 +39,9 @@ class NRecordReader extends RecordReader<LongWritable, Text> {
     public void initialize(InputSplit split, TaskAttemptContext context)
             throws IOException {
 
-/*  Initialize Input stream and reader. We use stream to seek to start of
-    split position and reader to readlines
-*/
+		/*  Initialize Input stream and reader. We use stream to seek to start of
+			split position and reader to readlines
+		*/
 
         this.fsplit = (FileSplit) split;
         this.conf = context.getConfiguration();
@@ -53,28 +50,27 @@ class NRecordReader extends RecordReader<LongWritable, Text> {
         fsinstream = fs.open(fsplit.getPath());
         br = new BufferedReader(new InputStreamReader(fsinstream));
 
-//  RecordLength field is set in driver program and informs 
-//  how many lines make a record
+		//  RecordLength field is set in driver program and informs 
+		//  how many lines make a record
 
         NLinesToRead = conf.getInt("RecordLength",0);
 
         splitstart = fsplit.getStart();
         splitlen = fsplit.getLength();
 
-/*  LineInputFormat, which we use as our input format, set the length of first
-    split to 1 less byte and for other split it decrements one byte from 
-    splitstart.  This it does to ensure it works hand in had with LineRecordReader.
-    Since we are writing our own record reader, we need to offset this so that
-    split boundaries line-up with line boundaries.
-*/       
+		/*  LineInputFormat, which we use as our input format, set the length of first
+			split to 1 less byte and for other split it decrements one byte from 
+			splitstart.  This it does to ensure it works hand in had with LineRecordReader.
+			Since we are writing our own record reader, we need to offset this so that
+			split boundaries line-up with line boundaries.
+		*/       
         if (splitstart == 0) splitlen++;
         else splitstart++;
         
         fsinstream.skip(splitstart);
     }
 
-// Read N lines as one record.  
-    
+	// Read N lines as one record.  
     public String readNLines() throws IOException {
         String Nlines = null;
         String line = null;
@@ -88,9 +84,9 @@ class NRecordReader extends RecordReader<LongWritable, Text> {
         return Nlines;
     }
 
-/* Read Nline records till split boundary. NewLine character length is added to 
-   overall count of bytes read as it is lost during readline.
-*/
+	/* Read Nline records till split boundary. NewLine character length is added to 
+	   overall count of bytes read as it is lost during readline.
+	*/
     @Override
     public boolean nextKeyValue() throws IOException {
         if (bytesread >= splitlen ) {
@@ -99,10 +95,15 @@ class NRecordReader extends RecordReader<LongWritable, Text> {
             String line;
             if ((line = readNLines()) != null) {
 				int bytes = line.getBytes().length + newlinebytes * NLinesToRead;
+				//This prevents the last line of the input from being used
+				//Due to how the split is set up, the last line would be a duplicate
+				//By setting this line equal to " ", this prevents any duplication
 				if(bytes + bytesread >= splitlen)
 				{
 					line = " ";
 				}
+				
+				//Otherwise writes the line as a key
 				value = new Text(line);
 				key = new LongWritable(splitstart);
                 bytesread += bytes;
@@ -115,7 +116,7 @@ class NRecordReader extends RecordReader<LongWritable, Text> {
 
     @Override
     public void close() throws IOException {
-// do nothing
+		// do nothing
     }
 
     @Override
